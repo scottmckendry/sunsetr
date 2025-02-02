@@ -1,0 +1,20 @@
+[Unit]
+Description=Sunsetr - Automatic color temperature adjustment for Hyprland
+After=hyprland-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sunsetr
+Restart=always
+RestartSec=30
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=yes
+PrivateTmp=yes
+RestrictNamespaces=yes
+
+[Install]
+WantedBy=hyprland-session.target
