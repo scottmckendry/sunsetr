@@ -1,15 +1,19 @@
 use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
 use fs2::FileExt;
 use signal_hook::{
     consts::signal::{SIGINT, SIGTERM},
     iterator::Signals,
 };
 use std::{
+    env,
     fs::File,
     io::{self, Write},
     os::unix::io::AsRawFd,
-    sync::Arc,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -25,12 +29,64 @@ mod utils;
 
 use config::Config;
 use constants::*;
-use backend::hyprland::{HyprsunsetClient, HyprsunsetProcess, is_hyprsunset_running, 
-                       verify_hyprsunset_installed_and_version, verify_hyprsunset_connection};
+use backend::{detect_backend, create_backend};
 use logger::Log;
 use startup_transition::StartupTransition;
-use time_state::{TimeState, TransitionState, get_transition_state, time_until_next_event, get_initial_values_for_state};
-use utils::{compare_versions, extract_version_from_output};
+use time_state::{TimeState, TransitionState, get_transition_state, time_until_next_event};
+
+/// Automatic color temperature controller for Wayland compositors
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+#[command(help_template = "\
+{before-help}{name} {version}
+{about-with-newline}
+{usage-heading} {usage}
+
+{all-args}{after-help}
+")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Show version information
+    #[command(visible_alias = "v")]
+    Version,
+    /// Show help information
+    #[command(visible_alias = "h")]
+    Help,
+}
+
+fn print_help() {
+    println!("sunsetr v{}", env!("CARGO_PKG_VERSION"));
+    println!("Automatic color temperature controller for Wayland compositors");
+    println!();
+    println!("USAGE:");
+    println!("    sunsetr [COMMAND]");
+    println!();
+    println!("COMMANDS:");
+    println!("    help, -h, --help       Show this help message");
+    println!("    version, -v, --version Show version information");
+    println!();
+    println!("CONFIG:");
+    println!("    Configuration file is automatically created in:");
+    println!("    $HOME/.config/sunsetr/sunsetr.toml");
+    println!();
+    println!("    Legacy location is also supported:");
+    println!("    $HOME/.config/hypr/sunsetr.toml");
+}
+
+fn print_version() {
+    println!("sunsetr v{}", env!("CARGO_PKG_VERSION"));
+}
+
+fn handle_invalid_argument(arg: &str) {
+    eprintln!("error: unknown argument '{}'", arg);
+    eprintln!();
+    print_help();
+}
 
 // Constants
 const CHECK_INTERVAL: Duration = Duration::from_secs(CHECK_INTERVAL_SECS);
@@ -99,23 +155,19 @@ impl Drop for TerminalGuard {
 /// Perform cleanup operations when shutting down the application.
 ///
 /// This function handles:
-/// - Stopping any hyprsunset process we started
+/// - Backend-specific cleanup (stopping managed processes)
 /// - Releasing the lock file
 /// - Removing the lock file from disk
 ///
 /// # Arguments
-/// * `hyprsunset_process` - Optional process handle if we started hyprsunset
+/// * `backend` - The backend instance to clean up
 /// * `lock_file` - File handle for the application lock
 /// * `lock_path` - Path to the lock file for removal
-fn cleanup(hyprsunset_process: Option<HyprsunsetProcess>, lock_file: File, lock_path: &str) {
+fn cleanup(backend: Box<dyn crate::backend::ColorTemperatureBackend>, lock_file: File, lock_path: &str) {
     Log::log_decorated("Performing cleanup...");
 
-    // Stop hyprsunset process if we started it
-    if let Some(process) = hyprsunset_process {
-        if let Err(e) = process.stop() {
-            Log::log_error(&format!("Error stopping hyprsunset: {}", e));
-        }
-    }
+    // Handle backend-specific cleanup
+    backend.cleanup();
 
     // Drop the lock file handle to release the lock
     drop(lock_file);
@@ -205,24 +257,46 @@ fn should_update_state(
 }
 
 fn main() -> Result<()> {
+    // Parse command-line arguments
+    let args: Vec<String> = env::args().collect();
+    
+    // Handle help and version flags
+    if args.len() == 2 {
+        let arg = &args[1];
+        match arg.as_str() {
+            "-h" | "--help" | "help" => {
+                print_help();
+                return Ok(());
+            }
+            "-v" | "--version" | "version" => {
+                print_version();
+                return Ok(());
+            }
+            _ => {
+                // Check if it's an invalid argument (starts with -)
+                if arg.starts_with('-') {
+                    handle_invalid_argument(arg);
+                    std::process::exit(1);
+                }
+                // If it doesn't start with -, treat it as an invalid non-flag argument
+                handle_invalid_argument(arg);
+                std::process::exit(1);
+            }
+        }
+    } else if args.len() > 2 {
+        // Multiple arguments - invalid
+        let invalid_args = args[1..].join(" ");
+        handle_invalid_argument(&invalid_args);
+        std::process::exit(1);
+    }
+    // If args.len() == 1, just run normally (no arguments provided)
+
     // Try to set up terminal features (cursor hiding, echo suppression)
     // This will gracefully handle cases where no terminal is available (e.g., systemd service)
     let _term = TerminalGuard::new()
         .context("failed to initialize terminal features")?;
 
-    // Handle version flag
-    if std::env::args()
-        .nth(1)
-        .is_some_and(|arg| arg == "--version" || arg == "-v")
-    {
-        println!("sunsetr {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-
     Log::log_version();
-
-    // First thing: verify hyprsunset is installed and compatible version
-    verify_hyprsunset_installed_and_version()?;
 
     // Set up signal handling
     let running = Arc::new(AtomicBool::new(true));
@@ -238,81 +312,55 @@ fn main() -> Result<()> {
         }
     });
 
-    // Create and acquire lock file
+    // Create lock file path
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
     let lock_path = format!("{}/sunsetr.lock", runtime_dir);
+
+    // Quick check if another instance is already running before doing expensive config validation
+    if let Ok(existing_lock) = File::open(&lock_path) {
+        if existing_lock.try_lock_exclusive().is_err() {
+            Log::log_error("Another instance of sunsetr is already running");
+            std::process::exit(1);
+        }
+        // Lock succeeded, but we opened for reading - close it and create properly below
+        drop(existing_lock);
+    }
+
+    // Load and validate configuration now that we know no other instance is running
+    let config = Config::load()?;
+    
+    // Detect and validate the backend early
+    let backend_type = detect_backend(&config)?;
+
+    // Create and acquire lock file properly
     let lock_file = File::create(&lock_path)?;
 
-    // Try to acquire exclusive lock
+    // Try to acquire exclusive lock (should succeed since we checked above, but race conditions possible)
     match lock_file.try_lock_exclusive() {
         Ok(_) => {
             Log::log_decorated("Lock acquired, starting sunsetr...");
 
-            // Load configuration first
-            let config = Config::load()?;
-
-            // Log configuration before starting hyprsunset
+            // Log configuration after acquiring lock
             config.log_config();
 
-            // Track hyprsunset process if we start it
-            let hyprsunset_process = if config.start_hyprsunset.unwrap_or(false) {
-                // Check if hyprsunset is already running
-                if is_hyprsunset_running() {
-                    Log::log_pipe();
-                    Log::log_error(
-                        "hyprsunset is already running but start_hyprsunset is set to true.\n\
-                        This conflict prevents sunsetr from starting its own hyprsunset instance.\n\
-                        \n\
-                        To fix this, either:\n\
-                        • Kill the existing hyprsunset process: pkill hyprsunset\n\
-                        • Change start_hyprsunset = false in sunsetr.toml\n\
-                        \n\
-                        Choose the first option if you want sunsetr to manage hyprsunset.\n\
-                        Choose the second option if you're using another method to start hyprsunset.",
-                    );
-                    std::process::exit(1);
-                }
-
-                // Determine initial values based on startup_transition setting
-                let startup_transition = config
-                    .startup_transition
-                    .unwrap_or(DEFAULT_STARTUP_TRANSITION);
-                    
-                let (initial_temp, initial_gamma) = if startup_transition {
-                    // If startup transition is enabled, always start with day values
-                    // so the startup transition can smoothly animate from day to current state
-                    (
-                        config.day_temp.unwrap_or(DEFAULT_DAY_TEMP),
-                        config.day_gamma.unwrap_or(DEFAULT_DAY_GAMMA),
-                    )
-                } else {
-                    // If startup transition is disabled, start with current interpolated values
-                    // for immediate correctness without any transition
-                    let current_state = get_transition_state(&config);
-                    get_initial_values_for_state(current_state, &config)
-                };
-
-                // Start hyprsunset with the calculated initial values
-                let process = HyprsunsetProcess::new(initial_temp, initial_gamma)?;
-                Some(process)
-            } else {
-                None
-            };
-
-            // Initialize hyprsunset client
-            let mut client = HyprsunsetClient::new()?;
-
-            // Verify hyprsunset connection and IPC compatibility - exit if it fails
-            verify_hyprsunset_connection(&mut client)?;
+            Log::log_decorated(&format!("Detected backend: {}", backend_type.name()));
+            
+            let mut backend = create_backend(backend_type, &config)?;
+            
+            // Test backend connection
+            if !backend.test_connection() {
+                anyhow::bail!(
+                    "Failed to connect to {} backend. Please ensure the compositor is running and supports the required protocols.",
+                    backend.backend_name()
+                );
+            }
+            
+            Log::log_decorated(&format!("Successfully connected to {} backend", backend.backend_name()));
 
             let mut current_transition_state = get_transition_state(&config);
             let mut last_check_time = Instant::now();
 
-            // Apply initial settings (should work since we verified connection)
-            // Note: We don't update current_transition_state after these applications because
-            // the main loop skips its first iteration to prevent startup timing conflicts.
-            // The startup transition system uses the originally captured state to avoid
-            // timing-related issues where the state might change during startup.
+            // Apply initial settings
             if running.load(Ordering::SeqCst) {
                 // Check if startup transition is enabled
                 let startup_transition = config
@@ -327,7 +375,7 @@ fn main() -> Result<()> {
 
                     // Create and execute the startup transition
                     let mut transition = StartupTransition::new(current_transition_state, &config);
-                    match transition.execute(&mut client, &config, &running) {
+                    match transition.execute(backend.as_mut(), &config, &running) {
                         Ok(_) => {}
                         Err(e) => {
                             Log::log_warning(&format!(
@@ -337,7 +385,7 @@ fn main() -> Result<()> {
                             Log::log_decorated("Falling back to immediate transition...");
 
                             // Fallback to immediate application
-                            match client.apply_startup_state(
+                            match backend.apply_startup_state(
                                 current_transition_state,
                                 &config,
                                 &running,
@@ -361,7 +409,7 @@ fn main() -> Result<()> {
                     }
                 } else {
                     // Use immediate transition to current interpolated values
-                    match client.apply_startup_state(current_transition_state, &config, &running) {
+                    match backend.apply_startup_state(current_transition_state, &config, &running) {
                         Ok(_) => {
                             Log::log_block_start("Initial state applied successfully");
                         }
@@ -408,7 +456,7 @@ fn main() -> Result<()> {
                 };
 
                 if should_update && running.load(Ordering::SeqCst) {
-                    match client.apply_transition_state(new_state, &config, &running) {
+                    match backend.apply_transition_state(new_state, &config, &running) {
                         Ok(_) => {
                             // Success - update our state
                             current_transition_state = new_state;
@@ -419,11 +467,11 @@ fn main() -> Result<()> {
                             // Failure - check if it's a connection issue that couldn't be resolved
                             if e.to_string().contains("reconnection attempt") {
                                 Log::log_error(&format!(
-                                    "Cannot communicate with hyprsunset: {}",
-                                    e
+                                    "Cannot communicate with {}: {}",
+                                    backend.backend_name(), e
                                 ));
                                 Log::log_decorated(
-                                    "hyprsunset appears to be permanently unavailable. Exiting...",
+                                    &format!("{} appears to be permanently unavailable. Exiting...", backend.backend_name())
                                 );
                                 break; // Exit the main loop
                             } else {
@@ -473,14 +521,11 @@ fn main() -> Result<()> {
 
             // Ensure proper cleanup on shutdown
             Log::log_block_start("Shutting down sunsetr...");
-            cleanup(hyprsunset_process, lock_file, &lock_path);
+            cleanup(backend, lock_file, &lock_path);
             Log::log_end();
         }
         Err(_) => {
-            Log::log_error(
-                "Another instance of sunsetr is already running.\n\
-                • Kill sunsetr before restarting.",
-            );
+            Log::log_error("Another instance of sunsetr is already running");
             std::process::exit(1);
         }
     }

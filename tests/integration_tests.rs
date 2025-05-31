@@ -382,7 +382,7 @@ fn test_integration_default_config_generation() {
     assert!(config.day_temp.is_some());
 
     // Check that config file was created
-    let config_path = temp_dir.path().join("hypr").join("sunsetr.toml");
+    let config_path = temp_dir.path().join("sunsetr").join("sunsetr.toml");
     assert!(config_path.exists());
 
     unsafe {
@@ -400,6 +400,7 @@ fn test_integration_time_state_calculation_scenarios() {
     fn create_config(sunset: &str, sunrise: &str, mode: &str, duration: u64) -> Config {
         Config {
             start_hyprsunset: Some(false),
+            backend: Some(sunsetr::config::Backend::Auto),
             startup_transition: Some(false),
             startup_transition_duration: Some(10),
             sunset: sunset.to_string(),
@@ -461,6 +462,46 @@ transition_mode = "center"
     // This should load but might generate warnings
     assert_eq!(config.transition_duration, Some(120));
     assert_eq!(config.update_interval, Some(10));
+
+    unsafe {
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+}
+
+#[test]
+#[serial]
+fn test_integration_config_conflict_detection() {
+    // Test that having configs in both locations produces an error
+    let temp_dir = tempdir().unwrap();
+    
+    // Create config in old location
+    let old_config_path = temp_dir.path().join("hypr").join("sunsetr.toml");
+    fs::create_dir_all(old_config_path.parent().unwrap()).unwrap();
+    fs::write(&old_config_path, r#"
+start_hyprsunset = false
+sunset = "19:00:00"
+sunrise = "06:00:00"
+"#).unwrap();
+    
+    // Create config in new location
+    let new_config_path = temp_dir.path().join("sunsetr").join("sunsetr.toml");
+    fs::create_dir_all(new_config_path.parent().unwrap()).unwrap();
+    fs::write(&new_config_path, r#"
+start_hyprsunset = true
+sunset = "20:00:00"
+sunrise = "07:00:00"
+"#).unwrap();
+
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+    }
+
+    let result = Config::load();
+    assert!(result.is_err());
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("Found configuration files in both locations"));
+    assert!(error_msg.contains("sunsetr/sunsetr.toml"));
+    assert!(error_msg.contains("hypr/sunsetr.toml"));
 
     unsafe {
         std::env::remove_var("XDG_CONFIG_HOME");

@@ -3,13 +3,16 @@
 //! This module contains all the configuration defaults, validation limits,
 //! and operational constants used throughout the application.
 
+use crate::config::Backend;
+
 // ═══ Application Configuration Defaults ═══
 // These values are used when config options are not specified by the user
 
 pub const DEFAULT_START_HYPRSUNSET: bool = true;
+pub const DEFAULT_BACKEND: Backend = Backend::Auto; // Auto-detected during config generation 
 pub const DEFAULT_STARTUP_TRANSITION: bool = false;
 pub const DEFAULT_STARTUP_TRANSITION_DURATION: u64 = 10; // seconds
-pub const DEFAULT_STARTUP_UPDATE_INTERVAL_MS: u64 = 200; // milliseconds (5 updates per second for smooth animation)
+pub const DEFAULT_STARTUP_UPDATE_INTERVAL_MS: u64 = 100; // milliseconds (5 updates per second for smooth animation)
 pub const DEFAULT_SUNSET: &str = "19:00:00";
 pub const DEFAULT_SUNRISE: &str = "06:00:00";
 pub const DEFAULT_NIGHT_TEMP: u32 = 3300; // Kelvin - warm, comfortable for night viewing

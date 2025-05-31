@@ -776,6 +776,50 @@ impl HyprsunsetClient {
             }
         }
     }
+
+    /// Apply specific temperature and gamma values directly.
+    ///
+    /// This method applies exact temperature and gamma values, bypassing
+    /// the normal state-based logic. It's used for fine-grained control
+    /// during animations like startup transitions.
+    ///
+    /// # Arguments
+    /// * `temperature` - Color temperature in Kelvin (1000-20000)
+    /// * `gamma` - Gamma value as percentage (0.0-100.0)
+    /// * `running` - Atomic flag to check if application should continue
+    ///
+    /// # Returns
+    /// - `Ok(())` if both temperature and gamma were applied successfully
+    /// - `Err` if either command fails after retries
+    pub fn apply_temperature_gamma(
+        &mut self,
+        temperature: u32,
+        gamma: f32,
+        running: &AtomicBool,
+    ) -> Result<()> {
+        // Check if we should continue before applying changes
+        if !running.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        // Apply temperature
+        let temp_command = format!("temperature {}", temperature);
+        self.send_command(&temp_command)?;
+
+        // Small delay between commands to prevent conflicts
+        thread::sleep(Duration::from_millis(COMMAND_DELAY_MS));
+
+        // Check again before second command
+        if !running.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        // Apply gamma
+        let gamma_command = format!("gamma {}", gamma);
+        self.send_command(&gamma_command)?;
+
+        Ok(())
+    }
 }
 
 /// Classify errors to determine appropriate retry strategy.

@@ -18,12 +18,12 @@
 //! prevents timing-related bugs where starting near transition boundaries could
 //! cause the program to jump to an unexpected state.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::backend::hyprland::client::HyprsunsetClient;
+use crate::backend::ColorTemperatureBackend;
 use crate::config::Config;
 use crate::constants::*;
 use crate::logger::Log;
@@ -272,31 +272,6 @@ impl StartupTransition {
         self.last_progress_pct = Some(percentage);
     }
 
-    /// Custom quiet send_command that doesn't produce logs
-    fn quiet_send_command(client: &mut HyprsunsetClient, command: &str) -> bool {
-        // Access the socket_path field which is public
-        if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&client.socket_path) {
-            // Set a reasonable timeout
-            stream
-                .set_read_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS)))
-                .ok();
-
-            // Send the command
-            if stream.write_all(command.as_bytes()).is_ok() {
-                // Try to read a response without logging it
-                let mut buffer = [0; SOCKET_BUFFER_SIZE];
-                if let Ok(bytes_read) = stream.read(&mut buffer) {
-                    if bytes_read > 0 {
-                        // Just check if response contains "ok"
-                        let response = String::from_utf8_lossy(&buffer[0..bytes_read]);
-                        return response.contains("ok");
-                    }
-                }
-            }
-        }
-        false
-    }
-
     /// Execute the startup transition sequence
     ///
     /// Performs a smooth animated transition from day values (day temperature and gamma
@@ -319,7 +294,7 @@ impl StartupTransition {
     /// - **Final state**: Originally captured state applied after animation
     ///
     /// # Arguments
-    /// * `client` - HyprsunsetClient for sending commands
+    /// * `backend` - ColorTemperatureBackend for applying state changes
     /// * `config` - Configuration with transition settings
     /// * `running` - Atomic flag to check if the program should continue
     ///
@@ -327,7 +302,7 @@ impl StartupTransition {
     /// Result indicating success or failure of the transition
     pub fn execute(
         &mut self,
-        client: &mut HyprsunsetClient,
+        backend: &mut dyn ColorTemperatureBackend,
         config: &Config,
         running: &AtomicBool,
     ) -> anyhow::Result<()> {
@@ -342,7 +317,7 @@ impl StartupTransition {
             // Apply the originally captured state to maintain timing consistency
             // Even when no transition is needed, we should use the captured state
             // rather than recalculating, to avoid potential timing-related state changes
-            client.apply_startup_state(self.initial_state, config, running)?;
+            backend.apply_startup_state(self.initial_state, config, running)?;
 
             return Ok(());
         }
@@ -393,19 +368,9 @@ impl StartupTransition {
             // Draw the progress bar instead of logging each step
             self.draw_progress_bar(progress, current_temp, current_gamma);
 
-            // Apply temp command
-            let temp_cmd = format!("temperature {}", current_temp);
-            let temp_success = Self::quiet_send_command(client, &temp_cmd);
-
-            // Small delay between commands
-            thread::sleep(Duration::from_millis(STARTUP_COMMAND_DELAY_MS));
-
-            // Apply gamma command
-            let gamma_cmd = format!("gamma {}", current_gamma);
-            let gamma_success = Self::quiet_send_command(client, &gamma_cmd);
-
-            // If both commands failed, return error
-            if !temp_success && !gamma_success {
+            // Apply the current animation frame using the backend's direct temperature/gamma method
+            if let Err(_) = backend.apply_temperature_gamma(current_temp, current_gamma, running) {
+                // If application fails, return error
                 // Add a newline after the progress bar if we're exiting early
                 let mut stdout = io::stdout().lock();
                 writeln!(stdout).ok();
@@ -416,7 +381,7 @@ impl StartupTransition {
                 Log::set_enabled(true);
 
                 return Err(anyhow::anyhow!(
-                    "Failed to apply startup transition commands"
+                    "Failed to apply startup transition values"
                 ));
             }
 
@@ -454,7 +419,7 @@ impl StartupTransition {
         // timing bug where starting near transition boundaries could cause the program
         // to jump to the wrong state (e.g., starting during a sunset transition but
         // ending up in night mode because 10 seconds passed during startup).
-        client.apply_startup_state(self.initial_state, config, running)?;
+        backend.apply_startup_state(self.initial_state, config, running)?;
 
         Ok(())
     }

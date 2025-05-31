@@ -1,112 +1,292 @@
 use anyhow::Result;
 
-/// Convert color temperature to RGB gamma curves.
+// =============================================================================
+// wlsunset Color Science Implementation (Ported from C to Rust)
+// =============================================================================
+// This is a direct port of wlsunset's color temperature calculation algorithm.
+// Original C implementation: https://git.sr.ht/~kennylevinsen/wlsunset
+// 
+// wlsunset uses proper colorimetric calculations with CIE XYZ color space,
+// planckian locus, and illuminant D curves to produce accurate color temperatures.
+// This approach is much more accurate than simple RGB approximations.
+
+/// RGB color representation (0.0 to 1.0 range)
+#[derive(Debug, Clone, Copy)]
+struct Rgb {
+    r: f64,
+    g: f64, 
+    b: f64,
+}
+
+/// XYZ color space representation
+#[derive(Debug, Clone, Copy)]
+struct Xyz {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+/// Clamp value to 0.0-1.0 range
+fn clamp(value: f64) -> f64 {
+    if value > 1.0 {
+        1.0
+    } else if value < 0.0 {
+        0.0
+    } else {
+        value
+    }
+}
+
+/// Apply sRGB gamma correction
+/// Based on: https://en.wikipedia.org/wiki/SRGB
+fn srgb_gamma(value: f64, gamma: f64) -> f64 {
+    if value <= 0.0031308 {
+        12.92 * value
+    } else {
+        (1.055 * value).powf(1.0 / gamma) - 0.055
+    }
+}
+
+/// Convert XYZ color space to sRGB using standard transformation matrix
+/// Reference: http://www.brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
+fn xyz_to_srgb(xyz: &Xyz) -> Rgb {
+    Rgb {
+        r: srgb_gamma(clamp(3.2404542 * xyz.x - 1.5371385 * xyz.y - 0.4985314 * xyz.z), 2.2),
+        g: srgb_gamma(clamp(-0.9692660 * xyz.x + 1.8760108 * xyz.y + 0.0415560 * xyz.z), 2.2),
+        b: srgb_gamma(clamp(0.0556434 * xyz.x - 0.2040259 * xyz.y + 1.0572252 * xyz.z), 2.2),
+    }
+}
+
+/// Normalize RGB so the maximum component is 1.0
+fn srgb_normalize(rgb: &mut Rgb) {
+    let max_component = rgb.r.max(rgb.g.max(rgb.b));
+    if max_component > 0.0 {
+        rgb.r /= max_component;
+        rgb.g /= max_component;
+        rgb.b /= max_component;
+    }
+}
+
+/// Calculate illuminant D chromaticity coordinates
 /// 
-/// This function implements the color temperature to RGB conversion using
-/// approximations of blackbody radiation curves, similar to implementations
-/// in wlsunset, redshift, and other color temperature tools.
+/// Illuminant D (daylight locus) describes natural daylight as we perceive it.
+/// This is how we expect bright, cold white light sources to look.
+/// Valid range: 2500K to 25000K (though we stretch it a bit for transitions)
+/// 
+/// Reference: https://en.wikipedia.org/wiki/Standard_illuminant#Illuminant_series_D
+fn illuminant_d(temp: i32) -> Result<(f64, f64), &'static str> {
+    let temp_f = temp as f64;
+    
+    let x = if temp >= 2500 && temp <= 7000 {
+        0.244063 + 
+        0.09911e3 / temp_f +
+        2.9678e6 / temp_f.powi(2) -
+        4.6070e9 / temp_f.powi(3)
+    } else if temp > 7000 && temp <= 25000 {
+        0.237040 +
+        0.24748e3 / temp_f +
+        1.9018e6 / temp_f.powi(2) -
+        2.0064e9 / temp_f.powi(3)
+    } else {
+        return Err("Temperature out of range for illuminant D");
+    };
+    
+    let y = (-3.0 * x.powi(2)) + (2.870 * x) - 0.275;
+    
+    Ok((x, y))
+}
+
+/// Calculate planckian locus chromaticity coordinates
+/// 
+/// Planckian locus (black body locus) describes the color of a black body
+/// at a certain temperature directly at its source. This is how we expect
+/// dim, warm light sources (like incandescent bulbs) to look.
+/// Valid range: 1667K to 25000K
+/// 
+/// Reference: https://en.wikipedia.org/wiki/Planckian_locus#Approximation
+fn planckian_locus(temp: i32) -> Result<(f64, f64), &'static str> {
+    let temp_f = temp as f64;
+    
+    let (x, y) = if temp >= 1667 && temp <= 4000 {
+        let x = -0.2661239e9 / temp_f.powi(3) -
+                0.2343589e6 / temp_f.powi(2) +
+                0.8776956e3 / temp_f +
+                0.179910;
+        
+        let y = if temp <= 2222 {
+            -1.1064814 * x.powi(3) -
+            1.34811020 * x.powi(2) +
+            2.18555832 * x -
+            0.20219683
+        } else {
+            -0.9549476 * x.powi(3) -
+            1.37418593 * x.powi(2) +
+            2.09137015 * x -
+            0.16748867
+        };
+        
+        (x, y)
+    } else if temp > 4000 && temp < 25000 {
+        let x = -3.0258469e9 / temp_f.powi(3) +
+                2.1070379e6 / temp_f.powi(2) +
+                0.2226347e3 / temp_f +
+                0.240390;
+        
+        let y = 3.0817580 * x.powi(3) -
+                5.87338670 * x.powi(2) +
+                3.75112997 * x -
+                0.37001483;
+        
+        (x, y)
+    } else {
+        return Err("Temperature out of range for planckian locus");
+    };
+    
+    Ok((x, y))
+}
+
+/// Calculate white point RGB values for a given color temperature
+/// 
+/// This is a direct port of wlsunset's calc_whitepoint function.
+/// It uses a combination of planckian locus (for warm temperatures) and
+/// illuminant D (for cool temperatures) with smooth transitions between them.
+/// 
+/// The algorithm smoothly transitions between planckian locus and illuminant D
+/// in the 2500K-4000K range to provide subjectively pleasant colors.
+pub fn calc_whitepoint(temp: u32) -> (f32, f32, f32) {
+    let temp = temp as i32;
+    
+    // D65 standard (6500K) is pure white
+    if temp == 6500 {
+        return (1.0, 1.0, 1.0);
+    }
+    
+    // Calculate chromaticity coordinates based on temperature range
+    let (wp_x, wp_y) = if temp >= 25000 {
+        // Very high temperatures: use illuminant D at 25000K
+        illuminant_d(25000).unwrap_or((0.31, 0.33))
+    } else if temp >= 4000 {
+        // High temperatures (4000K+): use illuminant D
+        illuminant_d(temp).unwrap_or((0.31, 0.33))
+    } else if temp >= 2500 {
+        // Medium temperatures (2500K-4000K): smooth transition between curves
+        let (x1, y1) = illuminant_d(temp).unwrap_or((0.31, 0.33));
+        let (x2, y2) = planckian_locus(temp).unwrap_or((0.45, 0.41));
+        
+        // Cosine interpolation factor for smooth transition
+        let factor = (4000.0 - temp as f64) / 1500.0;
+        let sine_factor = ((std::f64::consts::PI * factor).cos() + 1.0) / 2.0;
+        
+        let wp_x = x1 * sine_factor + x2 * (1.0 - sine_factor);
+        let wp_y = y1 * sine_factor + y2 * (1.0 - sine_factor);
+        
+        (wp_x, wp_y)
+    } else {
+        // Low temperatures: use planckian locus (minimum 1667K)
+        let safe_temp = temp.max(1667);
+        planckian_locus(safe_temp).unwrap_or((0.45, 0.41))
+    };
+    
+    // Convert chromaticity coordinates to XYZ
+    let wp_z = 1.0 - wp_x - wp_y;
+    let xyz = Xyz {
+        x: wp_x,
+        y: wp_y,
+        z: wp_z,
+    };
+    
+    // Convert XYZ to sRGB and normalize
+    let mut rgb = xyz_to_srgb(&xyz);
+    srgb_normalize(&mut rgb);
+    
+    // Return as f32 for compatibility with existing code
+    (rgb.r as f32, rgb.g as f32, rgb.b as f32)
+}
+
+// =============================================================================
+// End of wlsunset Color Science Implementation
+// =============================================================================
+
+/// Convert color temperature to RGB gamma curves using the same approach as wlsunset.
+/// 
+/// This function implements a simplified version of wlsunset's temperature calculation
+/// based on blackbody radiation and color science principles.
 /// 
 /// # Arguments
 /// * `temperature` - Color temperature in Kelvin (1000-25000)
-/// * `gamma_adjustment` - Gamma adjustment factor (0.1-10.0)
 /// 
 /// # Returns
 /// Tuple of (red_factor, green_factor, blue_factor) for gamma curve adjustment
-pub fn temperature_to_rgb(temperature: u32, gamma_adjustment: f32) -> (f32, f32, f32) {
-    // Clamp temperature to reasonable bounds
-    let temp = temperature.clamp(1000, 25000) as f64;
-    
-    let (red, green, blue) = if temp >= 6600.0 {
-        // Daylight (6600K+): cool temperatures
-        let red = temp / 100.0;
-        let red = 329.698727446 * red.powf(-0.1332047592);
-        
-        let green = temp / 100.0;
-        let green = 288.1221695283 * green.powf(-0.0755148492);
-        
-        let blue = 255.0;
-        
-        (red, green, blue)
-    } else if temp >= 1000.0 {
-        // Incandescent to daylight (1000K-6600K)
-        let red = 255.0;
-        
-        let green = temp / 100.0;
-        let green = if temp > 6600.0 {
-            288.1221695283 * green.powf(-0.0755148492)
-        } else {
-            99.4708025861 * green.ln() - 161.1195681661
-        };
-        
-        let blue = if temp >= 1900.0 {
-            let blue_temp = temp / 100.0;
-            138.5177312231 * blue_temp.ln() - 305.0447927307
-        } else {
-            0.0
-        };
-        
-        (red, green, blue)
-    } else {
-        // Very warm temperatures (below 1000K)
-        (255.0, 0.0, 0.0)
-    };
-
-    // Normalize to 0.0-1.0 range and apply gamma adjustment
-    let red_factor = ((red / 255.0).clamp(0.0, 1.0) as f32).powf(1.0 / gamma_adjustment);
-    let green_factor = ((green / 255.0).clamp(0.0, 1.0) as f32).powf(1.0 / gamma_adjustment);
-    let blue_factor = ((blue / 255.0).clamp(0.0, 1.0) as f32).powf(1.0 / gamma_adjustment);
-
-    (red_factor, green_factor, blue_factor)
+pub fn temperature_to_rgb(temperature: u32) -> (f32, f32, f32) {
+    calc_whitepoint(temperature)
 }
 
-/// Generate gamma table for a specific color channel.
+/// Generate gamma table for a specific color channel using wlsunset's approach.
 /// 
 /// Creates a gamma lookup table (LUT) that maps input values to output values
-/// based on the gamma curve and color temperature adjustment.
+/// using a power function gamma curve, just like wlsunset does.
 /// 
 /// # Arguments
-/// * `size` - Size of the gamma table (typically 256)
-/// * `gamma` - Gamma value for the curve
+/// * `size` - Size of the gamma table (typically 256 or 1024)
 /// * `color_factor` - Color temperature adjustment factor (0.0-1.0)
+/// * `gamma` - Gamma curve value (typically 1.0 for linear, 0.9 for 90% brightness)
 /// 
 /// # Returns
 /// Vector of 16-bit gamma values for this color channel
-pub fn generate_gamma_table(size: usize, gamma: f32, color_factor: f32) -> Vec<u16> {
+pub fn generate_gamma_table(size: usize, color_factor: f32, gamma: f64) -> Vec<u16> {
     let mut table = Vec::with_capacity(size);
     
     for i in 0..size {
-        let input = i as f32 / (size - 1) as f32;
-        let gamma_corrected = input.powf(1.0 / gamma);
-        let color_adjusted = gamma_corrected * color_factor;
-        let output = (color_adjusted * 65535.0).clamp(0.0, 65535.0) as u16;
-        table.push(output);
+        // Calculate normalized input value (0.0 to 1.0)
+        let val = i as f64 / (size - 1) as f64;
+        
+        // Apply color temperature factor and gamma curve using power function
+        // This matches wlsunset's formula: pow(val * color_factor, 1.0 / gamma)
+        let output = ((val * color_factor as f64).powf(1.0 / gamma) * 65535.0).clamp(0.0, 65535.0);
+        
+        table.push(output as u16);
     }
     
     table
 }
 
-/// Create complete gamma tables for RGB channels.
+/// Create complete gamma tables for RGB channels using wlsunset's approach.
 /// 
 /// Generates the full set of gamma lookup tables needed for the
-/// wlr-gamma-control-unstable-v1 protocol.
+/// wlr-gamma-control-unstable-v1 protocol, matching wlsunset's implementation.
+/// 
+/// NOTE: This implementation appears correct from a protocol perspective but
+/// currently produces no visual changes. See wayland_implementation_analysis.md
+/// for detailed investigation results.
 /// 
 /// # Arguments
 /// * `size` - Size of each gamma table (reported by compositor)
 /// * `temperature` - Color temperature in Kelvin
-/// * `gamma` - Gamma adjustment value
+/// * `gamma_percent` - Gamma adjustment as percentage (90% = 0.9, 100% = 1.0)
 /// 
 /// # Returns
 /// Byte vector containing concatenated R, G, B gamma tables
-pub fn create_gamma_tables(size: usize, temperature: u32, gamma: f32) -> Result<Vec<u8>> {
-    // Convert temperature to RGB factors
-    let (red_factor, green_factor, blue_factor) = temperature_to_rgb(temperature, gamma);
+pub fn create_gamma_tables(size: usize, temperature: u32, gamma_percent: f32) -> Result<Vec<u8>> {
+    use crate::logger::Log;
     
-    // Generate individual channel tables
-    let red_table = generate_gamma_table(size, gamma, red_factor);
-    let green_table = generate_gamma_table(size, gamma, green_factor);
-    let blue_table = generate_gamma_table(size, gamma, blue_factor);
+    // Convert temperature to RGB factors
+    let (red_factor, green_factor, blue_factor) = temperature_to_rgb(temperature);
+    
+    Log::log_decorated(&format!("DEBUG: temp={}K, gamma={}%, RGB factors=({:.3}, {:.3}, {:.3})", 
+             temperature, gamma_percent * 100.0, red_factor, green_factor, blue_factor));
+    
+    // Generate individual channel tables using power function gamma curves
+    let red_table = generate_gamma_table(size, red_factor, gamma_percent as f64);
+    let green_table = generate_gamma_table(size, green_factor, gamma_percent as f64);
+    let blue_table = generate_gamma_table(size, blue_factor, gamma_percent as f64);
+    
+    // Log some sample values for debugging
+    Log::log_decorated(&format!("DEBUG: Sample gamma values - R: {:?}, G: {:?}, B: {:?}", 
+             &red_table[0..5], &green_table[0..5], &blue_table[0..5]));
     
     // Convert to bytes (little-endian 16-bit values)
+    // Using the documented wlr-gamma-control protocol order: RED, GREEN, BLUE
+    // This matches wlsunset's layout: r = table, g = table + ramp_size, b = table + 2*ramp_size
     let mut gamma_data = Vec::with_capacity(size * 3 * 2);
     
     // Red channel
@@ -127,31 +307,68 @@ pub fn create_gamma_tables(size: usize, temperature: u32, gamma: f32) -> Result<
     Ok(gamma_data)
 }
 
+/// Create a linear gamma table for testing protocol communication.
+/// This produces a neutral gamma table that should have no visual effect.
+#[allow(dead_code)]
+pub fn create_linear_gamma_tables(size: usize) -> Result<Vec<u8>> {
+    use crate::logger::Log;
+    
+    Log::log_decorated("DEBUG: Creating linear gamma tables for testing");
+    
+    // Create linear ramps for each channel
+    let mut gamma_data = Vec::with_capacity(size * 3 * 2);
+    
+    // Generate linear ramp: 0, 1, 2, ..., 65535
+    let linear_table: Vec<u16> = (0..size)
+        .map(|i| ((i as u64 * 65535) / (size - 1) as u64) as u16)
+        .collect();
+    
+    Log::log_decorated(&format!("DEBUG: Linear table sample: {:?}", &linear_table[0..5]));
+    
+    // Red channel
+    for value in &linear_table {
+        gamma_data.extend_from_slice(&value.to_le_bytes());
+    }
+    
+    // Green channel
+    for value in &linear_table {
+        gamma_data.extend_from_slice(&value.to_le_bytes());
+    }
+    
+    // Blue channel
+    for value in &linear_table {
+        gamma_data.extend_from_slice(&value.to_le_bytes());
+    }
+    
+    Log::log_decorated(&format!("DEBUG: Created linear gamma data, size: {} bytes", gamma_data.len()));
+    Ok(gamma_data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_temperature_to_rgb_daylight() {
-        let (r, g, b) = temperature_to_rgb(6500, 1.0);
-        // Daylight should be fairly neutral
-        assert!((r - 1.0).abs() < 0.1);
-        assert!((g - 1.0).abs() < 0.1);
-        assert!((b - 1.0).abs() < 0.1);
+        let (r, g, b) = temperature_to_rgb(6500);
+        // Daylight should be neutral
+        assert!((r - 1.0).abs() < 0.01);
+        assert!((g - 1.0).abs() < 0.01);
+        assert!((b - 1.0).abs() < 0.01);
     }
 
     #[test]
     fn test_temperature_to_rgb_warm() {
-        let (r, g, b) = temperature_to_rgb(3000, 1.0);
+        let (r, g, b) = temperature_to_rgb(3300);
         // Warm light should be red-heavy, blue-light
         assert!(r > g);
         assert!(g > b);
-        assert!(b < 0.5);
+        assert!(b < 0.8);
     }
 
     #[test]
     fn test_temperature_to_rgb_cool() {
-        let (r, g, b) = temperature_to_rgb(8000, 1.0);
+        let (r, g, b) = temperature_to_rgb(8000);
         // Cool light should be blue-heavy
         assert!(b > g);
         assert!(r < b);

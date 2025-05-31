@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::sync::atomic::AtomicBool;
 
-use crate::config::Config;
+use crate::config::{Config, Backend};
 use crate::time_state::TransitionState;
 
 pub mod hyprland;
@@ -60,11 +60,43 @@ pub trait ColorTemperatureBackend {
         running: &AtomicBool,
     ) -> Result<()>;
 
+    /// Apply specific temperature and gamma values directly.
+    /// 
+    /// This method is used for fine-grained control during animations like startup transitions.
+    /// It bypasses the normal state-based application and sets exact values.
+    /// 
+    /// # Arguments
+    /// * `temperature` - Color temperature in Kelvin
+    /// * `gamma` - Gamma value as a percentage (0.0-100.0)
+    /// * `running` - Atomic flag to check if the application should continue
+    /// 
+    /// # Returns
+    /// - `Ok(())` if the values were applied successfully
+    /// - `Err` if there was an error applying the values
+    fn apply_temperature_gamma(
+        &mut self,
+        temperature: u32,
+        gamma: f32,
+        running: &AtomicBool,
+    ) -> Result<()>;
+
     /// Get a human-readable name for this backend.
     /// 
     /// # Returns
     /// A string identifying the backend (e.g., "Hyprland", "Wayland")
     fn backend_name(&self) -> &'static str;
+
+    /// Perform backend-specific cleanup operations.
+    /// 
+    /// This method is called during application shutdown to clean up any
+    /// resources or processes managed by the backend.
+    /// 
+    /// The default implementation does nothing, but backends can override
+    /// this to perform specific cleanup (e.g., stopping managed processes).
+    fn cleanup(self: Box<Self>) {
+        // Default implementation does nothing
+        // Backends can override this for specific cleanup needs
+    }
 }
 
 /// Detect the appropriate backend based on the current environment and configuration.
@@ -82,37 +114,74 @@ pub trait ColorTemperatureBackend {
 /// # Errors
 /// Returns an error if no suitable backend can be determined or if the
 /// environment is not supported (e.g., not running on Wayland).
-pub fn detect_backend(_config: &Config) -> Result<BackendType> {
-    // TODO: Implement use_wayland configuration field
+pub fn detect_backend(config: &Config) -> Result<BackendType> {
     // Check explicit configuration first
-    // if let Some(use_wayland) = config.use_wayland {
-    //     if use_wayland {
-    //         // Verify we're actually on Wayland
-    //         if std::env::var("WAYLAND_DISPLAY").is_err() {
-    //             anyhow::bail!(
-    //                 "Configuration specifies use_wayland=true but WAYLAND_DISPLAY is not set.\n\
-    //                 Are you running on Wayland?"
-    //             );
-    //         }
-    //         return Ok(BackendType::Wayland);
-    //     } else {
-    //         return Ok(BackendType::Hyprland);
-    //     }
-    // }
+    if let Some(backend) = &config.backend {
+        match backend {
+            Backend::Auto => {
+                // Auto-detect based on environment
+                if std::env::var("WAYLAND_DISPLAY").is_err() {
+                    anyhow::bail!(
+                        "sunsetr requires a Wayland session. WAYLAND_DISPLAY is not set.\n\
+                        Please ensure you're running on a Wayland compositor."
+                    );
+                }
 
-    // Auto-detect based on environment
-    if std::env::var("WAYLAND_DISPLAY").is_err() {
-        anyhow::bail!(
-            "sunsetr requires a Wayland session. WAYLAND_DISPLAY is not set.\n\
-            Please ensure you're running on a Wayland compositor."
-        );
-    }
-
-    // Check if we're running on Hyprland
-    if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
-        Ok(BackendType::Hyprland)
+                // Check if we're running on Hyprland
+                if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
+                    Ok(BackendType::Hyprland)
+                } else {
+                    Ok(BackendType::Wayland)
+                }
+            }
+            Backend::Wayland => {
+                // Verify we're actually on Wayland
+                if std::env::var("WAYLAND_DISPLAY").is_err() {
+                    anyhow::bail!(
+                        "Configuration specifies backend=\"wayland\" but WAYLAND_DISPLAY is not set.\n\
+                        Are you running on Wayland?"
+                    );
+                }
+                Ok(BackendType::Wayland)
+            }
+            Backend::Hyprland => {
+                // Verify we're actually running on Hyprland when explicitly configured
+                if std::env::var("WAYLAND_DISPLAY").is_err() {
+                    anyhow::bail!(
+                        "Configuration specifies backend=\"hyprland\" but WAYLAND_DISPLAY is not set.\n\
+                        Are you running on Wayland?"
+                    );
+                }
+                
+                if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_err() {
+                    anyhow::bail!(
+                        "Configuration specifies backend=\"hyprland\" but you're not running on Hyprland.\n\
+                        \n\
+                        To fix this, either:\n\
+                        • Switch to automatic detection: set backend=\"auto\" in sunsetr.toml\n\
+                        • Use the Wayland backend: set backend=\"wayland\" in sunsetr.toml\n\
+                        • Run sunsetr on Hyprland instead of your current compositor"
+                    );
+                }
+                
+                Ok(BackendType::Hyprland)
+            }
+        }
     } else {
-        Ok(BackendType::Wayland)
+        // Fallback to auto-detection when backend is not specified
+        if std::env::var("WAYLAND_DISPLAY").is_err() {
+            anyhow::bail!(
+                "sunsetr requires a Wayland session. WAYLAND_DISPLAY is not set.\n\
+                Please ensure you're running on a Wayland compositor."
+            );
+        }
+
+        // Check if we're running on Hyprland
+        if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
+            Ok(BackendType::Hyprland)
+        } else {
+            Ok(BackendType::Wayland)
+        }
     }
 }
 
@@ -160,11 +229,26 @@ impl BackendType {
     /// Get the default configuration values for this backend type.
     /// 
     /// # Returns
-    /// Tuple of (start_hyprsunset, use_wayland) defaults for this backend
-    pub fn default_config_values(&self) -> (bool, bool) {
+    /// Tuple of (start_hyprsunset, backend) defaults for this backend
+    #[allow(dead_code)]
+    pub fn default_config_values(&self) -> (bool, Backend) {
         match self {
-            BackendType::Hyprland => (true, false),   // Start hyprsunset, don't use wayland protocols
-            BackendType::Wayland => (false, true),    // Don't start hyprsunset, use wayland protocols
+            BackendType::Hyprland => (true, Backend::Hyprland),   // Start hyprsunset, use hyprland backend
+            BackendType::Wayland => (false, Backend::Wayland),    // Don't start hyprsunset, use wayland backend
+        }
+    }
+
+    /// Get the default configuration values for auto-detection.
+    /// 
+    /// # Returns
+    /// Tuple of (start_hyprsunset, backend) defaults based on environment detection
+    #[allow(dead_code)]
+    pub fn auto_config_values() -> (bool, Backend) {
+        // Check if we're running on Hyprland
+        if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
+            (true, Backend::Hyprland)   // Start hyprsunset on Hyprland
+        } else {
+            (false, Backend::Wayland)   // Don't start hyprsunset on other compositors
         }
     }
 } 

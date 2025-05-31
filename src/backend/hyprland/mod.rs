@@ -89,6 +89,7 @@ impl HyprlandBackend {
     }
 
     /// Get a reference to the managed hyprsunset process, if any.
+    #[allow(dead_code)]
     pub fn process(&self) -> Option<&HyprsunsetProcess> {
         self.process.as_ref()
     }
@@ -96,6 +97,7 @@ impl HyprlandBackend {
     /// Take ownership of the managed hyprsunset process, if any.
     /// 
     /// This is used during cleanup to properly terminate the process.
+    #[allow(dead_code)]
     pub fn take_process(self) -> Option<HyprsunsetProcess> {
         self.process
     }
@@ -124,8 +126,28 @@ impl ColorTemperatureBackend for HyprlandBackend {
         self.client.apply_startup_state(state, config, running)
     }
 
+    fn apply_temperature_gamma(
+        &mut self,
+        temperature: u32,
+        gamma: f32,
+        running: &AtomicBool,
+    ) -> Result<()> {
+        self.client.apply_temperature_gamma(temperature, gamma, running)
+    }
+
     fn backend_name(&self) -> &'static str {
         "Hyprland"
+    }
+
+    fn cleanup(self: Box<Self>) {
+        // Stop any managed hyprsunset process
+        if let Some(process) = self.process {
+            Log::log_decorated("Stopping managed hyprsunset process...");
+            match process.stop() {
+                Ok(_) => Log::log_decorated("Hyprsunset process stopped successfully"),
+                Err(e) => Log::log_decorated(&format!("Warning: Failed to stop hyprsunset process: {}", e)),
+            }
+        }
     }
 }
 

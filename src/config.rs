@@ -1,15 +1,42 @@
 use anyhow::{Context, Result};
 use chrono::{NaiveTime, Timelike}; // Added Timelike import
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    execute,
+    style::{Color, Print, ResetColor, SetForegroundColor},
+    terminal::{self, ClearType},
+};
 use serde::Deserialize;
 use std::fs::{self};
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use crate::constants::*;
 use crate::logger::Log;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    Auto,
+    Hyprland,
+    Wayland,
+}
+
+impl Backend {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Backend::Auto => "auto",
+            Backend::Hyprland => "hyprland",
+            Backend::Wayland => "wayland",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub start_hyprsunset: Option<bool>,
+    pub backend: Option<Backend>,
     pub startup_transition: Option<bool>, // whether to enable smooth startup transition
     pub startup_transition_duration: Option<u64>, // seconds for startup transition
     pub sunset: String,
@@ -25,9 +52,246 @@ pub struct Config {
 
 impl Config {
     pub fn get_config_path() -> Result<PathBuf> {
-        dirs::config_dir()
-            .map(|p| p.join("hypr").join("sunsetr.toml"))
-            .context("Could not determine config directory")
+        let config_dir = dirs::config_dir().context("Could not determine config directory")?;
+
+        let new_config_path = config_dir.join("sunsetr").join("sunsetr.toml");
+        let old_config_path = config_dir.join("hypr").join("sunsetr.toml");
+
+        let new_exists = new_config_path.exists();
+        let old_exists = old_config_path.exists();
+
+        match (new_exists, old_exists) {
+            (true, true) => Self::choose_config_file(new_config_path, old_config_path),
+            (true, false) => Ok(new_config_path),
+            (false, true) => Ok(old_config_path),
+            (false, false) => Ok(new_config_path), // Generate new config in new location
+        }
+    }
+
+    /// Interactive terminal interface for choosing which config file to keep
+    fn choose_config_file(new_path: PathBuf, old_path: PathBuf) -> Result<PathBuf> {
+        Log::log_warning("Configuration conflict detected");
+        Log::log_pipe();
+        Log::log_decorated("Please select which config to keep:");
+
+        let options = vec![
+            (
+                format!("{} (new location)", new_path.display()),
+                new_path.clone(),
+            ),
+            (
+                format!("{} (legacy location)", old_path.display()),
+                old_path.clone(),
+            ),
+        ];
+
+        let selected_index = Self::show_dropdown_menu(&options)?;
+        let (chosen_path, to_remove) = if selected_index == 0 {
+            (new_path, old_path)
+        } else {
+            (old_path, new_path)
+        };
+
+        // Confirm deletion
+        Log::log_pipe();
+        Log::log_decorated(&format!("You chose: {}", chosen_path.display()));
+        Log::log_decorated(&format!("Will remove: {}", to_remove.display()));
+
+        let confirm_options = vec![
+            ("Yes, remove the file".to_string(), true),
+            ("No, cancel operation".to_string(), false),
+        ];
+
+        let confirm_index = Self::show_dropdown_menu(&confirm_options)?;
+        let should_remove = confirm_options[confirm_index].1;
+
+        if !should_remove {
+            Log::log_pipe();
+            Log::log_warning(
+                "Operation cancelled. Please manually remove one of the config files.",
+            );
+            std::process::exit(1);
+        }
+
+        // Try to use trash-cli first, fallback to direct removal
+        let removed_successfully = if Self::try_trash_file(&to_remove) {
+            Log::log_pipe();
+            Log::log_decorated(&format!(
+                "Successfully moved to trash: {}",
+                to_remove.display()
+            ));
+            true
+        } else if let Err(e) = fs::remove_file(&to_remove) {
+            Log::log_pipe();
+            Log::log_warning(&format!("Failed to remove {}: {}", to_remove.display(), e));
+            Log::log_decorated("Please remove it manually to avoid future conflicts.");
+            false
+        } else {
+            Log::log_pipe();
+            Log::log_decorated(&format!("Successfully removed: {}", to_remove.display()));
+            true
+        };
+
+        if removed_successfully {
+            Log::log_pipe();
+            Log::log_decorated(&format!("Using configuration: {}", chosen_path.display()));
+        }
+
+        Ok(chosen_path)
+    }
+
+    /// Display an interactive dropdown menu and return the selected index
+    fn show_dropdown_menu<T>(options: &[(String, T)]) -> Result<usize> {
+        Log::log_pipe();
+        if options.is_empty() {
+            anyhow::bail!("No options provided to dropdown menu");
+        }
+
+        // Enable raw mode to capture key events
+        terminal::enable_raw_mode().context("Failed to enable raw mode")?;
+
+        let mut selected = 0;
+        let mut stdout = io::stdout();
+
+        // Ensure we clean up on any exit
+        let cleanup = || {
+            let _ = terminal::disable_raw_mode();
+            let _ = execute!(io::stdout(), cursor::Show);
+        };
+
+        // Set up cleanup on CTRL+C
+        let result = loop {
+            // Clear the current menu display
+            execute!(
+                stdout,
+                cursor::Hide,
+                terminal::Clear(ClearType::FromCursorDown)
+            )?;
+
+            // Display options
+            for (i, (option, _)) in options.iter().enumerate() {
+                if i == selected {
+                    execute!(stdout, Print("┃ ► "), Print(format!("{}\r\n", option)))?;
+                } else {
+                    execute!(stdout, Print("┃   "), Print(format!("{}\r\n", option)))?;
+                }
+            }
+
+            execute!(
+                stdout,
+                Print("┃\r\n"),
+                Print(
+                    "┃ Use ↑/↓ arrows or j/k keys to navigate, Enter to select, Ctrl+C to exit\r\n"
+                )
+            )?;
+
+            stdout.flush()?;
+
+            // Move cursor back to start of menu for next update
+            execute!(stdout, cursor::MoveUp((options.len() + 2) as u16))?;
+
+            // Wait for key event
+            match event::read() {
+                Ok(Event::Key(KeyEvent {
+                    code, modifiers, ..
+                })) => {
+                    match code {
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if selected > 0 {
+                                selected -= 1;
+                            } else {
+                                selected = options.len() - 1; // Wrap to bottom
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if selected < options.len() - 1 {
+                                selected += 1;
+                            } else {
+                                selected = 0; // Wrap to top
+                            }
+                        }
+                        KeyCode::Enter => {
+                            break Ok(selected);
+                        }
+                        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                            cleanup();
+                            // Move cursor past the menu before logging
+                            execute!(
+                                stdout,
+                                cursor::MoveDown((options.len() + 2) as u16),
+                                cursor::Show
+                            )?;
+                            stdout.flush()?;
+                            Log::log_pipe();
+                            Log::log_warning(
+                                "Operation cancelled. Please manually remove one of the config files.",
+                            );
+                            std::process::exit(1);
+                        }
+                        KeyCode::Esc => {
+                            cleanup();
+                            // Move cursor past the menu before logging
+                            execute!(
+                                stdout,
+                                cursor::MoveDown((options.len() + 2) as u16),
+                                cursor::Show
+                            )?;
+                            stdout.flush()?;
+                            Log::log_pipe();
+                            Log::log_warning(
+                                "Operation cancelled. Please manually remove one of the config files.",
+                            );
+                            std::process::exit(1);
+                        }
+                        _ => {
+                            // Ignore other keys
+                        }
+                    }
+                }
+                Ok(_) => {
+                    // Ignore other events (mouse, etc.)
+                }
+                Err(e) => {
+                    break Err(anyhow::anyhow!("Error reading input: {}", e));
+                }
+            }
+        };
+
+        // Clean up terminal state
+        cleanup();
+
+        // Move cursor past the menu
+        execute!(
+            stdout,
+            cursor::MoveDown((options.len() + 2) as u16),
+            cursor::Show
+        )?;
+        stdout.flush()?;
+
+        result
+    }
+
+    /// Attempt to move file to trash using trash-cli
+    fn try_trash_file(path: &PathBuf) -> bool {
+        // Try trash-put command (most common)
+        if let Ok(status) = std::process::Command::new("trash-put").arg(path).status() {
+            return status.success();
+        }
+
+        // Try trash command (alternative)
+        if let Ok(status) = std::process::Command::new("trash").arg(path).status() {
+            return status.success();
+        }
+
+        // Try gio trash (GNOME)
+        if let Ok(status) = std::process::Command::new("gio")
+            .args(["trash", path.to_str().unwrap_or("")])
+            .status()
+        {
+            return status.success();
+        }
+
+        false
     }
 
     pub fn create_default_config(path: &PathBuf) -> Result<()> {
@@ -38,6 +302,7 @@ impl Config {
         // Calculate the maximum width needed for comment alignment
         // We need to calculate the full "key = value" width for each line
         let config_entries = [
+            format!("backend = \"{}\"", DEFAULT_BACKEND.as_str()),
             format!("start_hyprsunset = {}", DEFAULT_START_HYPRSUNSET),
             format!("startup_transition = {}", DEFAULT_STARTUP_TRANSITION),
             format!(
@@ -68,6 +333,7 @@ impl Config {
 
         let default_config: String = format!(
             r#"#[Sunsetr configuration]
+{}# Backend to use: "auto", "hyprland" or "wayland"
 {}# Set true if you're not using hyprsunset.service
 {}# Enable smooth transition when sunsetr starts
 {}# Duration of startup transition in seconds ({}-{})
@@ -84,32 +350,33 @@ impl Config {
 {}# "start_at" - transition starts at sunset/sunrise time
 {}# "center" - transition is centered on sunset/sunrise time
 "#,
-            formatted_entries[0], // start_hyprsunset entry
-            formatted_entries[1], // enable_startup_transition entry
-            formatted_entries[2], // startup_transition_duration entry
+            formatted_entries[0], // backend entry
+            formatted_entries[1], // start_hyprsunset entry
+            formatted_entries[2], // startup_transition entry
+            formatted_entries[3], // startup_transition_duration entry
             MINIMUM_STARTUP_TRANSITION_DURATION,
             MAXIMUM_STARTUP_TRANSITION_DURATION, // startup_transition_duration range
-            formatted_entries[3],                // sunset entry
-            formatted_entries[4],                // sunrise entry
-            formatted_entries[5],                // night_temp entry
+            formatted_entries[4],                // sunset entry
+            formatted_entries[5],                // sunrise entry
+            formatted_entries[6],                // night_temp entry
             MINIMUM_TEMP,
             MAXIMUM_TEMP,         // night_temp range
-            formatted_entries[6], // day_temp entry
+            formatted_entries[7], // day_temp entry
             MINIMUM_TEMP,
             MAXIMUM_TEMP,         // day_temp range
-            formatted_entries[7], // night_gamma entry
+            formatted_entries[8], // night_gamma entry
             MINIMUM_GAMMA,
             MAXIMUM_GAMMA,        // night_gamma range
-            formatted_entries[8], // day_gamma entry
+            formatted_entries[9], // day_gamma entry
             MINIMUM_GAMMA,
-            MAXIMUM_GAMMA,        // day_gamma range
-            formatted_entries[9], // transition_duration entry
+            MAXIMUM_GAMMA,         // day_gamma range
+            formatted_entries[10], // transition_duration entry
             MINIMUM_TRANSITION_DURATION,
             MAXIMUM_TRANSITION_DURATION, // transition_duration range
-            formatted_entries[10],       // update_interval entry
+            formatted_entries[11],       // update_interval entry
             MINIMUM_UPDATE_INTERVAL,
             MAXIMUM_UPDATE_INTERVAL,    // update_interval range
-            formatted_entries[11],      // transition_mode entry
+            formatted_entries[12],      // transition_mode entry
             " ".repeat(max_line_width), // padding for first comment line
             " ".repeat(max_line_width), // padding for second comment line
             " ".repeat(max_line_width), // padding for third comment line
@@ -133,6 +400,11 @@ impl Config {
         // Set default for start_hyprsunset if not specified
         if config.start_hyprsunset.is_none() {
             config.start_hyprsunset = Some(DEFAULT_START_HYPRSUNSET);
+        }
+
+        // Set default for backend if not specified (auto-detection will be added later)
+        if config.backend.is_none() {
+            config.backend = Some(DEFAULT_BACKEND);
         }
 
         // Validate time formats
@@ -271,20 +543,27 @@ impl Config {
             self.start_hyprsunset.unwrap_or(DEFAULT_START_HYPRSUNSET)
         ));
         Log::log_indented(&format!(
+            "Backend: {}",
+            self.backend.as_ref().unwrap_or(&DEFAULT_BACKEND).as_str()
+        ));
+        Log::log_indented(&format!(
             "Enable startup transition: {}",
             self.startup_transition
                 .unwrap_or(DEFAULT_STARTUP_TRANSITION)
         ));
-        
+
         // Only show startup transition duration if startup transition is enabled
-        if self.startup_transition.unwrap_or(DEFAULT_STARTUP_TRANSITION) {
+        if self
+            .startup_transition
+            .unwrap_or(DEFAULT_STARTUP_TRANSITION)
+        {
             Log::log_indented(&format!(
                 "Startup transition duration: {} seconds",
                 self.startup_transition_duration
                     .unwrap_or(DEFAULT_STARTUP_TRANSITION_DURATION)
             ));
         }
-        
+
         Log::log_indented(&format!("Sunset time: {}", self.sunset));
         Log::log_indented(&format!("Sunrise time: {}", self.sunrise));
         Log::log_indented(&format!(
@@ -319,11 +598,32 @@ impl Config {
                 .unwrap_or(DEFAULT_TRANSITION_MODE)
         ));
     }
+
+    /// Validate the configuration for logical consistency and compatibility.
+    ///
+    /// This is a public wrapper around the internal validation logic,
+    /// primarily useful for testing and external validation.
+    pub fn validate(&self) -> Result<()> {
+        validate_config(self)
+    }
 }
 
 /// Comprehensive configuration validation to prevent impossible or problematic setups
 fn validate_config(config: &Config) -> Result<()> {
     use chrono::NaiveTime;
+
+    // 0. Validate backend configuration compatibility
+    let backend = config.backend.as_ref().unwrap_or(&DEFAULT_BACKEND);
+    let start_hyprsunset = config.start_hyprsunset.unwrap_or(DEFAULT_START_HYPRSUNSET);
+
+    // Only validate explicit backend choices, Auto will be resolved at runtime
+    if *backend == Backend::Wayland && start_hyprsunset {
+        anyhow::bail!(
+            "Incompatible configuration: backend=\"wayland\" and start_hyprsunset=true. \
+            When using Wayland protocols (backend=\"wayland\"), hyprsunset should not be started (start_hyprsunset=false). \
+            Please set either backend=\"hyprland\" or start_hyprsunset=false."
+        );
+    }
 
     let sunset = NaiveTime::parse_from_str(&config.sunset, "%H:%M:%S")
         .context("Invalid sunset time format")?;
@@ -339,12 +639,40 @@ fn validate_config(config: &Config) -> Result<()> {
         .as_deref()
         .unwrap_or(DEFAULT_TRANSITION_MODE);
 
+    // Validate transition duration (hard limits)
+    if !(MINIMUM_TRANSITION_DURATION..=MAXIMUM_TRANSITION_DURATION)
+        .contains(&transition_duration_mins)
+    {
+        anyhow::bail!(
+            "Transition duration ({} minutes) must be between {} and {} minutes",
+            transition_duration_mins,
+            MINIMUM_TRANSITION_DURATION,
+            MAXIMUM_TRANSITION_DURATION
+        );
+    }
+
+    // Validate startup transition duration (hard limits)
+    if let Some(startup_duration_secs) = config.startup_transition_duration {
+        if !(MINIMUM_STARTUP_TRANSITION_DURATION..=MAXIMUM_STARTUP_TRANSITION_DURATION)
+            .contains(&startup_duration_secs)
+        {
+            anyhow::bail!(
+                "Startup transition duration ({} seconds) must be between {} and {} seconds",
+                startup_duration_secs,
+                MINIMUM_STARTUP_TRANSITION_DURATION,
+                MAXIMUM_STARTUP_TRANSITION_DURATION
+            );
+        }
+    }
+
     // 0. Validate basic ranges for temperature and gamma (hard limits)
     if let Some(temp) = config.night_temp {
         if !(MINIMUM_TEMP..=MAXIMUM_TEMP).contains(&temp) {
             anyhow::bail!(
                 "Night temperature ({}) must be between {} and {} Kelvin",
-                temp, MINIMUM_TEMP, MAXIMUM_TEMP
+                temp,
+                MINIMUM_TEMP,
+                MAXIMUM_TEMP
             );
         }
     }
@@ -353,7 +681,9 @@ fn validate_config(config: &Config) -> Result<()> {
         if !(MINIMUM_TEMP..=MAXIMUM_TEMP).contains(&temp) {
             anyhow::bail!(
                 "Day temperature ({}) must be between {} and {} Kelvin",
-                temp, MINIMUM_TEMP, MAXIMUM_TEMP
+                temp,
+                MINIMUM_TEMP,
+                MAXIMUM_TEMP
             );
         }
     }
@@ -362,7 +692,9 @@ fn validate_config(config: &Config) -> Result<()> {
         if !(MINIMUM_GAMMA..=MAXIMUM_GAMMA).contains(&gamma) {
             anyhow::bail!(
                 "Night gamma ({}%) must be between {}% and {}%",
-                gamma, MINIMUM_GAMMA, MAXIMUM_GAMMA
+                gamma,
+                MINIMUM_GAMMA,
+                MAXIMUM_GAMMA
             );
         }
     }
@@ -371,17 +703,11 @@ fn validate_config(config: &Config) -> Result<()> {
         if !(MINIMUM_GAMMA..=MAXIMUM_GAMMA).contains(&gamma) {
             anyhow::bail!(
                 "Day gamma ({}%) must be between {}% and {}%",
-                gamma, MINIMUM_GAMMA, MAXIMUM_GAMMA
+                gamma,
+                MINIMUM_GAMMA,
+                MAXIMUM_GAMMA
             );
         }
-    }
-
-    // Validate transition duration (hard limits)
-    if !(MINIMUM_TRANSITION_DURATION..=MAXIMUM_TRANSITION_DURATION).contains(&transition_duration_mins) {
-        anyhow::bail!(
-            "Transition duration ({} minutes) must be between {} and {} minutes",
-            transition_duration_mins, MINIMUM_TRANSITION_DURATION, MAXIMUM_TRANSITION_DURATION
-        );
     }
 
     // 1. Check for identical sunset/sunrise times
@@ -702,6 +1028,7 @@ mod tests {
     ) -> Config {
         Config {
             start_hyprsunset: Some(false),
+            backend: Some(Backend::Auto),
             startup_transition: Some(false),
             startup_transition_duration: Some(10),
             sunset: sunset.to_string(),
@@ -719,8 +1046,8 @@ mod tests {
     #[test]
     fn test_config_load_default_creation() {
         let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join("hypr").join("sunsetr.toml");
-        
+        let config_path = temp_dir.path().join("sunsetr").join("sunsetr.toml");
+
         // First load should create default config
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
@@ -729,7 +1056,7 @@ mod tests {
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
         }
-        
+
         assert!(result.is_ok());
         assert!(config_path.exists());
     }
@@ -737,73 +1064,171 @@ mod tests {
     #[test]
     fn test_config_validation_basic() {
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_ok());
     }
 
     #[test]
+    fn test_config_validation_backend_compatibility() {
+        // Test valid combinations
+        let mut config = create_test_config(
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
+        );
+
+        // Valid: use_wayland=false, start_hyprsunset=true (Hyprland backend)
+        config.backend = Some(Backend::Hyprland);
+        config.start_hyprsunset = Some(true);
+        assert!(validate_config(&config).is_ok());
+
+        // Valid: use_wayland=true, start_hyprsunset=false (Wayland backend)
+        config.backend = Some(Backend::Wayland);
+        config.start_hyprsunset = Some(false);
+        assert!(validate_config(&config).is_ok());
+
+        // Valid: use_wayland=false, start_hyprsunset=false (Hyprland without auto-start)
+        config.backend = Some(Backend::Hyprland);
+        config.start_hyprsunset = Some(false);
+        assert!(validate_config(&config).is_ok());
+
+        // Invalid: use_wayland=true, start_hyprsunset=true (conflicting)
+        config.backend = Some(Backend::Wayland);
+        config.start_hyprsunset = Some(true);
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Incompatible configuration")
+        );
+    }
+
+    #[test]
     fn test_config_validation_identical_times() {
         let config = create_test_config(
-            "12:00:00", "12:00:00", Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            "12:00:00",
+            "12:00:00",
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_err());
-        assert!(validate_config(&config).unwrap_err().to_string().contains("cannot be the same time"));
+        assert!(
+            validate_config(&config)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be the same time")
+        );
     }
 
     #[test]
     fn test_config_validation_extreme_short_day() {
         // 30 minute day period (sunrise 23:45, sunset 00:15)
         let config = create_test_config(
-            "00:15:00", "23:45:00", Some(5), Some(TEST_STANDARD_TRANSITION_DURATION), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            "00:15:00",
+            "23:45:00",
+            Some(5),
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_err());
-        assert!(validate_config(&config).unwrap_err().to_string().contains("Day period is too short"));
+        assert!(
+            validate_config(&config)
+                .unwrap_err()
+                .to_string()
+                .contains("Day period is too short")
+        );
     }
 
     #[test]
     fn test_config_validation_extreme_short_night() {
         // 30 minute night period (sunset 23:45, sunrise 00:15)
         let config = create_test_config(
-            "23:45:00", "00:15:00", Some(5), Some(TEST_STANDARD_TRANSITION_DURATION), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            "23:45:00",
+            "00:15:00",
+            Some(5),
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_err());
-        assert!(validate_config(&config).unwrap_err().to_string().contains("Night period is too short"));
+        assert!(
+            validate_config(&config)
+                .unwrap_err()
+                .to_string()
+                .contains("Night period is too short")
+        );
     }
 
     #[test]
     fn test_config_validation_extreme_temperature_values() {
         // Test minimum temperature boundary
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(MINIMUM_TEMP), Some(MAXIMUM_TEMP), Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(MINIMUM_TEMP),
+            Some(MAXIMUM_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_ok());
 
         // Test below minimum temperature
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(MINIMUM_TEMP - 1), Some(TEST_STANDARD_DAY_TEMP), Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(MINIMUM_TEMP - 1),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_err());
 
         // Test above maximum temperature
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(MAXIMUM_TEMP + 1), Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(MAXIMUM_TEMP + 1),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_err());
     }
@@ -812,25 +1237,43 @@ mod tests {
     fn test_config_validation_extreme_gamma_values() {
         // Test minimum gamma boundary
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), Some(MINIMUM_GAMMA), Some(MAXIMUM_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(MINIMUM_GAMMA),
+            Some(MAXIMUM_GAMMA),
         );
         assert!(validate_config(&config).is_ok());
 
         // Test below minimum gamma
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), Some(MINIMUM_GAMMA - 0.1), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(MINIMUM_GAMMA - 0.1),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_err());
 
-        // Test above maximum gamma  
+        // Test above maximum gamma
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), Some(TEST_STANDARD_NIGHT_GAMMA), Some(MAXIMUM_GAMMA + 0.1)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(MAXIMUM_GAMMA + 0.1),
         );
         assert!(validate_config(&config).is_err());
     }
@@ -839,37 +1282,57 @@ mod tests {
     fn test_config_validation_extreme_transition_durations() {
         // Test minimum transition duration
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(MINIMUM_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(MINIMUM_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_ok());
 
         // Test maximum transition duration
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(MAXIMUM_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(MAXIMUM_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_ok());
 
         // Test below minimum (should fail validation)
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(MINIMUM_TRANSITION_DURATION - 1), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(MINIMUM_TRANSITION_DURATION - 1),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_err());
 
         // Test above maximum (should fail validation)
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(MAXIMUM_TRANSITION_DURATION + 1), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(MAXIMUM_TRANSITION_DURATION + 1),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_err());
     }
@@ -878,31 +1341,51 @@ mod tests {
     fn test_config_validation_extreme_update_intervals() {
         // Test minimum update interval
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(MINIMUM_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(MINIMUM_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_ok());
 
         // Test maximum update interval
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(120), Some(MAXIMUM_UPDATE_INTERVAL), 
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(120),
+            Some(MAXIMUM_UPDATE_INTERVAL),
             Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_ok());
 
         // Test update interval longer than transition
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(30), Some(30 * 60 + 1), 
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(30),
+            Some(30 * 60 + 1),
             Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_err());
-        assert!(validate_config(&config).unwrap_err().to_string().contains("longer than transition duration"));
+        assert!(
+            validate_config(&config)
+                .unwrap_err()
+                .to_string()
+                .contains("longer than transition duration")
+        );
     }
 
     #[test]
@@ -911,20 +1394,30 @@ mod tests {
         // Day period is about 11 hours (06:00-19:00), night is 13 hours
         // Transition of 60 minutes in center mode means 30 minutes each side
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(60), Some(TEST_STANDARD_TRANSITION_DURATION), 
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(60),
+            Some(TEST_STANDARD_TRANSITION_DURATION),
             Some("center"),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_ok());
 
         // But if we make the transition too long for center mode
         // Let's try a 22-hour transition in center mode (11 hours each side)
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(22 * 60), Some(TEST_STANDARD_TRANSITION_DURATION), 
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(22 * 60),
+            Some(TEST_STANDARD_TRANSITION_DURATION),
             Some("center"),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_err());
     }
@@ -933,19 +1426,29 @@ mod tests {
     fn test_config_validation_midnight_crossings() {
         // Sunset after midnight, sunrise in evening - valid but extreme
         let config = create_test_config(
-            "01:00:00", "22:00:00", Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            "01:00:00",
+            "22:00:00",
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_ok());
 
         // Very late sunset, very early sunrise
         let config = create_test_config(
-            "23:30:00", "00:30:00", Some(TEST_STANDARD_TRANSITION_DURATION), 
-            Some(TEST_STANDARD_UPDATE_INTERVAL), Some(TEST_STANDARD_MODE),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            "23:30:00",
+            "00:30:00",
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some(TEST_STANDARD_UPDATE_INTERVAL),
+            Some(TEST_STANDARD_MODE),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         assert!(validate_config(&config).is_ok());
     }
@@ -961,9 +1464,15 @@ mod tests {
     fn test_config_validation_transition_overlap_detection() {
         // Test transition overlap detection with extreme short periods
         let config = create_test_config(
-            "12:30:00", "12:00:00", Some(60), Some(TEST_STANDARD_TRANSITION_DURATION), Some("center"),
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            "12:30:00",
+            "12:00:00",
+            Some(60),
+            Some(TEST_STANDARD_TRANSITION_DURATION),
+            Some("center"),
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         // Should fail because day period is only 30 minutes, can't fit 1-hour center transition
         assert!(validate_config(&config).is_err());
@@ -973,9 +1482,15 @@ mod tests {
     fn test_config_validation_performance_warnings() {
         // Test configuration that should generate performance warnings
         let config = create_test_config(
-            TEST_STANDARD_SUNSET, TEST_STANDARD_SUNRISE, Some(5), Some(5), Some(TEST_STANDARD_MODE), // Very frequent updates
-            Some(TEST_STANDARD_NIGHT_TEMP), Some(TEST_STANDARD_DAY_TEMP), 
-            Some(TEST_STANDARD_NIGHT_GAMMA), Some(TEST_STANDARD_DAY_GAMMA)
+            TEST_STANDARD_SUNSET,
+            TEST_STANDARD_SUNRISE,
+            Some(5),
+            Some(5),
+            Some(TEST_STANDARD_MODE), // Very frequent updates
+            Some(TEST_STANDARD_NIGHT_TEMP),
+            Some(TEST_STANDARD_DAY_TEMP),
+            Some(TEST_STANDARD_NIGHT_GAMMA),
+            Some(TEST_STANDARD_DAY_GAMMA),
         );
         // Should pass validation but might generate warnings (captured in logs)
         assert!(validate_config(&config).is_ok());
@@ -985,10 +1500,10 @@ mod tests {
     fn test_default_config_file_creation() {
         let temp_dir = tempdir().unwrap();
         let config_path = temp_dir.path().join("sunsetr.toml");
-        
+
         Config::create_default_config(&config_path).unwrap();
         assert!(config_path.exists());
-        
+
         let content = fs::read_to_string(&config_path).unwrap();
         assert!(content.contains("start_hyprsunset"));
         assert!(content.contains("sunset"));
@@ -1001,7 +1516,7 @@ mod tests {
     fn test_config_toml_parsing() {
         let temp_dir = tempdir().unwrap();
         let config_path = temp_dir.path().join("test_config.toml");
-        
+
         let config_content = r#"
 start_hyprsunset = false
 startup_transition = true
@@ -1016,11 +1531,11 @@ transition_duration = 45
 update_interval = 60
 transition_mode = "finish_by"
 "#;
-        
+
         fs::write(&config_path, config_content).unwrap();
         let content = fs::read_to_string(&config_path).unwrap();
         let config: Config = toml::from_str(&content).unwrap();
-        
+
         assert_eq!(config.start_hyprsunset, Some(false));
         assert_eq!(config.sunset, "19:00:00");
         assert_eq!(config.sunrise, "06:00:00");
@@ -1036,7 +1551,7 @@ sunset = "19:00:00"
 sunrise = "06:00:00"
 night_temp = "not_a_number"  # This should cause parsing to fail
 "#;
-        
+
         let result: Result<Config, _> = toml::from_str(malformed_content);
         assert!(result.is_err());
     }
