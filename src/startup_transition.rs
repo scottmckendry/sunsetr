@@ -6,13 +6,13 @@
 //! ongoing sunrise/sunset transitions).
 //!
 //! # When This System Is Used
-//! 
+//!
 //! This system is only active when `startup_transition = true` in the configuration.
 //! When `startup_transition = false`, sunsetr starts hyprsunset directly at the
 //! correct interpolated state for immediate accuracy without any animation.
 //!
 //! # Timing Consistency
-//! 
+//!
 //! The system captures the target state at startup and applies that exact state
 //! after the transition completes, regardless of how much time has passed. This
 //! prevents timing-related bugs where starting near transition boundaries could
@@ -23,20 +23,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::backend::hyprland::client::HyprsunsetClient;
 use crate::config::Config;
 use crate::constants::*;
-use crate::hyprsunset::HyprsunsetClient;
 use crate::logger::Log;
 use crate::time_state::{TimeState, TransitionState, get_transition_state};
 use crate::utils::{interpolate_f32, interpolate_u32};
 
 /// Manages smooth animated transitions during application startup.
-/// 
+///
 /// The startup transition system provides a gentle visual transition from
 /// default day settings to the appropriate current state, preventing jarring
 /// changes when the application starts. It supports both static targets
 /// (stable day/night periods) and dynamic targets (during sunrise/sunset).
-/// 
+///
 /// # Features
 /// - Animated progress bar with live temperature/gamma display
 /// - Dynamic target tracking for ongoing transitions
@@ -61,15 +61,15 @@ pub struct StartupTransition {
 
 impl StartupTransition {
     /// Create a new startup transition with the given target state.
-    /// 
+    ///
     /// The transition always starts from day values to provide a consistent
     /// baseline, regardless of the target state. This creates a natural feel
     /// where the display appears to "wake up" and adjust to the current time.
-    /// 
+    ///
     /// # Arguments
     /// * `current_state` - Target state to transition towards
     /// * `config` - Configuration containing transition duration and color values
-    /// 
+    ///
     /// # Returns
     /// New StartupTransition ready for execution
     pub fn new(current_state: TransitionState, config: &Config) -> Self {
@@ -101,19 +101,19 @@ impl StartupTransition {
     }
 
     /// Calculate current target values for animation purposes during the startup transition.
-    /// 
+    ///
     /// This method determines the target temperature and gamma values to animate towards
     /// during the startup transition. For static targets (stable day/night), it returns
     /// fixed values. For dynamic targets (ongoing sunrise/sunset), it tracks the current
     /// transition progress to create smooth animation.
-    /// 
+    ///
     /// Note: This is used only for animation targeting during the startup transition.
     /// The final state applied after startup completion is always the originally captured
     /// state to prevent timing-related issues.
-    /// 
+    ///
     /// # Arguments
     /// * `config` - Configuration containing temperature and gamma ranges
-    /// 
+    ///
     /// # Returns
     /// Tuple of (target_temperature, target_gamma) for the current animation frame
     fn calculate_current_target(&self, config: &Config) -> (u32, f32) {
@@ -146,7 +146,7 @@ impl StartupTransition {
                 progress: initial_progress,
             } => {
                 // Complex case: target is itself changing
-                
+
                 // If we're in a dynamic transition, recalculate where we should be now
                 if self.is_dynamic_target {
                     // Get the current transition state to see if it's still progressing
@@ -232,10 +232,10 @@ impl StartupTransition {
     }
 
     /// Draw an animated progress bar showing the current transition progress.
-    /// 
+    ///
     /// Creates a visual progress indicator with live temperature and gamma values.
     /// Only redraws when the percentage changes to avoid flickering.
-    /// 
+    ///
     /// # Arguments
     /// * `progress` - Current progress (0.0 to 1.0)
     /// * `current_temp` - Current temperature value being applied
@@ -253,7 +253,11 @@ impl StartupTransition {
 
         // Create progress bar string with proper styling
         let bar = if filled > 0 {
-            format!("{}>{}", "=".repeat(filled.saturating_sub(1)), " ".repeat(empty))
+            format!(
+                "{}>{}",
+                "=".repeat(filled.saturating_sub(1)),
+                " ".repeat(empty)
+            )
         } else {
             " ".repeat(PROGRESS_BAR_WIDTH)
         };
@@ -294,31 +298,31 @@ impl StartupTransition {
     }
 
     /// Execute the startup transition sequence
-    /// 
+    ///
     /// Performs a smooth animated transition from day values (day temperature and gamma
     /// from the config) to the correct state for the current time. This creates a natural
     /// "wake up" effect where the display starts bright and adjusts to the appropriate
     /// settings over the configured startup transition duration.
-    /// 
+    ///
     /// For dynamic targets (starting during ongoing sunrise/sunset transitions), the target
     /// values are dynamically calculated during animation to track the moving transition,
     /// creating smooth visual progression.
-    /// 
+    ///
     /// The final applied state is always the originally captured state to prevent
     /// timing-related bugs where the startup transition duration could cause incorrect
     /// state transitions.
-    /// 
+    ///
     /// # Animation Flow
     /// - **Start**: Always from day temperature/gamma (consistent baseline)
     /// - **Target**: Correct state for current time (day/night/transition progress)  
     /// - **Dynamic tracking**: Target moves for ongoing transitions during animation
     /// - **Final state**: Originally captured state applied after animation
-    /// 
+    ///
     /// # Arguments
     /// * `client` - HyprsunsetClient for sending commands
     /// * `config` - Configuration with transition settings
     /// * `running` - Atomic flag to check if the program should continue
-    /// 
+    ///
     /// # Returns
     /// Result indicating success or failure of the transition
     pub fn execute(
@@ -335,13 +339,11 @@ impl StartupTransition {
             && self.start_gamma == initial_target_gamma
             && !self.is_dynamic_target
         {
-            Log::log_decorated("No startup transition needed - already at target values");
-            
             // Apply the originally captured state to maintain timing consistency
             // Even when no transition is needed, we should use the captured state
             // rather than recalculating, to avoid potential timing-related state changes
             client.apply_startup_state(self.initial_state, config, running)?;
-            
+
             return Ok(());
         }
 
@@ -446,7 +448,7 @@ impl StartupTransition {
         Log::log_decorated("Startup transition complete");
 
         // Apply the originally captured state instead of recalculating it
-        // 
+        //
         // IMPORTANT: We must use the state that was captured when the program started,
         // not recalculate it after the startup transition completes. This prevents a
         // timing bug where starting near transition boundaries could cause the program

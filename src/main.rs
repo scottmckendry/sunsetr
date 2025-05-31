@@ -17,159 +17,23 @@ use termios::{os::linux::ECHOCTL, *};
 
 mod config;
 mod constants;
-mod hyprsunset;
+mod backend;
 mod logger;
-mod process;
 mod startup_transition;
 mod time_state;
 mod utils;
 
 use config::Config;
 use constants::*;
-use hyprsunset::HyprsunsetClient;
+use backend::hyprland::{HyprsunsetClient, HyprsunsetProcess, is_hyprsunset_running, 
+                       verify_hyprsunset_installed_and_version, verify_hyprsunset_connection};
 use logger::Log;
-use process::{HyprsunsetProcess, is_hyprsunset_running};
 use startup_transition::StartupTransition;
 use time_state::{TimeState, TransitionState, get_transition_state, time_until_next_event, get_initial_values_for_state};
 use utils::{compare_versions, extract_version_from_output};
 
 // Constants
 const CHECK_INTERVAL: Duration = Duration::from_secs(CHECK_INTERVAL_SECS);
-
-/// Verify that hyprsunset is installed and check version compatibility.
-///
-/// This function performs both installation verification and version checking
-/// in a single step for efficiency. It will:
-/// 1. Check if hyprsunset command exists
-/// 2. Extract version information from output
-/// 3. Validate version compatibility against requirements
-///
-/// # Returns
-/// - `Ok(())` if hyprsunset is installed and compatible
-/// - `Err` with detailed error message if issues are found
-fn verify_hyprsunset_installed_and_version() -> Result<()> {
-    // Check if hyprsunset exists and get version in one go
-    match std::process::Command::new("hyprsunset")
-        .arg("--version")
-        .output()
-    {
-        Ok(output) => {
-            // Check both stdout and stderr for version info
-            let version_output = if !output.stdout.is_empty() {
-                String::from_utf8_lossy(&output.stdout)
-            } else {
-                String::from_utf8_lossy(&output.stderr)
-            };
-
-            if let Some(version) = extract_version_from_output(&version_output) {
-                Log::log_decorated(&format!("Found hyprsunset {}", version));
-
-                if is_version_compatible(&version) {
-                    Ok(())
-                } else {
-                    anyhow::bail!(
-                        "hyprsunset {} is not compatible with sunsetr.\n\
-                        Required minimum version: {}\n\
-                        Compatible versions: {}\n\
-                        Please update hyprsunset to a compatible version.",
-                        version,
-                        REQUIRED_HYPRSUNSET_VERSION,
-                        COMPATIBLE_HYPRSUNSET_VERSIONS.join(", ")
-                    )
-                }
-            } else {
-                Log::log_warning("Could not parse version from hyprsunset output");
-                Log::log_decorated("Attempting to proceed with compatibility test...");
-                Ok(()) // Fall back to functional testing
-            }
-        }
-        Err(_) => {
-            // hyprsunset command failed - check if it's installed at all
-            match std::process::Command::new("which")
-                .arg("hyprsunset")
-                .output()
-            {
-                Ok(which_output) if which_output.status.success() => {
-                    Log::log_warning("hyprsunset found but version check failed");
-                    Log::log_decorated(
-                        "This might be an older version. Will attempt compatibility test...",
-                    );
-                    Ok(())
-                }
-                _ => anyhow::bail!("hyprsunset is not installed on the system"),
-            }
-        }
-    }
-}
-
-/// Check if a hyprsunset version is compatible with sunsetr.
-///
-/// This function first checks against an explicit compatibility list,
-/// then falls back to semantic version comparison if not found.
-///
-/// # Arguments
-/// * `version` - Version string to check (e.g., "v0.2.0")
-///
-/// # Returns
-/// `true` if the version is compatible, `false` otherwise
-fn is_version_compatible(version: &str) -> bool {
-    // Check if it's in our explicit compatibility list
-    if COMPATIBLE_HYPRSUNSET_VERSIONS.contains(&version) {
-        return true;
-    }
-
-    // Use the utility function for version comparison
-    compare_versions(version, REQUIRED_HYPRSUNSET_VERSION) >= std::cmp::Ordering::Equal
-}
-
-/// Verify that we can establish a connection to the hyprsunset socket.
-///
-/// This function attempts connection with a retry mechanism to handle
-/// cases where hyprsunset might still be starting up. It provides
-/// detailed error messages to help users troubleshoot connection issues.
-///
-/// # Arguments
-/// * `client` - Mutable reference to HyprsunsetClient for connection testing
-///
-/// # Returns
-/// - `Ok(())` if connection is successful
-/// - `Err` with troubleshooting information if connection fails
-fn verify_hyprsunset_connection(client: &mut HyprsunsetClient) -> Result<()> {
-    // First connection attempt
-    if client.test_connection() {
-        return Ok(());
-    }
-
-    // If first attempt fails, hyprsunset might still be starting up
-    Log::log_decorated("Waiting 10 seconds for hyprsunset to become available...");
-
-    thread::sleep(Duration::from_secs(10));
-
-    // Second connection attempt after waiting
-    if client.test_connection() {
-        Log::log_decorated("Successfully connected to hyprsunset after waiting.");
-        return Ok(());
-    }
-
-    // Both attempts failed - log critical error
-    Log::log_critical("Cannot connect to hyprsunset socket.");
-    println!();
-
-    // Both attempts failed - provide helpful error message
-    anyhow::bail!(
-        "This usually means:\n\
-          • hyprsunset is not running\n\
-          • hyprsunset service is not enabled\n\
-          • You're not running on Hyprland\n\
-        \n\
-        Please ensure hyprsunset is running and try again.\n\
-        \n\
-        Suggested hyprsunset startup methods:\n\
-          1. Autostart hyprsunset: set start_hyprsunset to true in sunsetr.toml\n\
-          2. Start hyprsunset manually: hyprsunset\n\
-          3. Enable the service: systemctl --user enable hyprsunset.service"
-    );
-}
 
 /// Manages terminal state to hide cursor and suppress control character echoing.
 ///
@@ -269,7 +133,7 @@ fn cleanup(hyprsunset_process: Option<HyprsunsetProcess>, lock_file: File, lock_
 /// Determine whether the application state should be updated.
 ///
 /// This function implements the logic for deciding when to apply state changes
-/// to hyprsunset. It considers:
+/// to the backend. It considers:
 /// - Transition start/end detection
 /// - Progress during ongoing transitions  
 /// - State changes between stable periods

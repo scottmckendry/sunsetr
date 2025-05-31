@@ -13,7 +13,7 @@ use crate::time_state::{TimeState, TransitionState};
 use crate::utils::{interpolate_f32, interpolate_u32};
 
 /// Error classification for retry logic.
-/// 
+///
 /// Different types of errors require different handling strategies:
 /// - Temporary: Should retry (network issues, timeouts)
 /// - Permanent: Don't retry (permission denied, invalid commands)
@@ -26,7 +26,7 @@ enum ErrorType {
 }
 
 /// Client for communicating with the hyprsunset daemon via Unix socket.
-/// 
+///
 /// This client handles all communication with hyprsunset, including:
 /// - Socket path determination and connection management
 /// - Command retry logic with error classification
@@ -38,12 +38,12 @@ pub struct HyprsunsetClient {
 
 impl HyprsunsetClient {
     /// Create a new hyprsunset client with appropriate socket path.
-    /// 
+    ///
     /// Determines the socket path using the same logic as hyprsunset:
     /// 1. Check HYPRLAND_INSTANCE_SIGNATURE environment variable
     /// 2. Use XDG_RUNTIME_DIR or fallback to /run/user/{uid}
     /// 3. Construct path: {runtime_dir}/hypr/{instance}/.hyprsunset.sock
-    /// 
+    ///
     /// # Returns
     /// New HyprsunsetClient instance ready for connection attempts
     pub fn new() -> Result<Self> {
@@ -69,13 +69,13 @@ impl HyprsunsetClient {
     }
 
     /// Send a command to hyprsunset with proper logging and retry logic.
-    /// 
+    ///
     /// This is the main interface for sending commands to hyprsunset. It automatically
     /// handles retries, error classification, and reconnection attempts.
-    /// 
+    ///
     /// # Arguments
     /// * `command` - Command string to send to hyprsunset
-    /// 
+    ///
     /// # Returns
     /// - `Ok(())` if command is sent successfully
     /// - `Err` if all retry attempts fail
@@ -89,11 +89,11 @@ impl HyprsunsetClient {
     }
 
     /// Try to reconnect to hyprsunset if it becomes unavailable during operation.
-    /// 
+    ///
     /// This method handles the case where hyprsunset becomes unresponsive or restarts
     /// during operation. It implements a recovery strategy with multiple attempts
     /// and appropriate delays.
-    /// 
+    ///
     /// # Returns
     /// - `true` if reconnection is successful
     /// - `false` if all reconnection attempts fail
@@ -125,15 +125,15 @@ impl HyprsunsetClient {
     }
 
     /// Send a command with retry logic and error classification.
-    /// 
+    ///
     /// This method implements the core retry logic with different strategies
     /// based on error type classification. It handles temporary failures,
     /// permanent errors, and socket disconnections differently.
-    /// 
+    ///
     /// # Arguments
     /// * `command` - Command string to send
     /// * `max_retries` - Maximum number of retry attempts
-    /// 
+    ///
     /// # Returns
     /// Result indicating success or failure after all attempts
     fn send_command_with_retry(&mut self, command: &str, max_retries: u32) -> Result<()> {
@@ -252,14 +252,14 @@ impl HyprsunsetClient {
     }
 
     /// Attempt to send a single command without retry logic.
-    /// 
+    ///
     /// This is the low-level command sending method that handles the actual
     /// socket communication. It connects, sends the command, attempts to read
     /// a response, and handles cleanup.
-    /// 
+    ///
     /// # Arguments
     /// * `command` - Command string to send
-    /// 
+    ///
     /// # Returns
     /// Result indicating success or the specific failure
     fn try_send_command(&mut self, command: &str) -> Result<()> {
@@ -297,10 +297,10 @@ impl HyprsunsetClient {
     }
 
     /// Test connection to hyprsunset socket without sending commands.
-    /// 
+    ///
     /// This method provides a non-intrusive way to check if hyprsunset is
     /// responsive. It's used for startup verification and reconnection logic.
-    /// 
+    ///
     /// # Returns
     /// - `true` if connection test succeeds
     /// - `false` if connection test fails
@@ -330,17 +330,17 @@ impl HyprsunsetClient {
     }
 
     /// Apply time-based state (Day or Night) with appropriate temperature and gamma settings.
-    /// 
+    ///
     /// This method handles stable time periods by applying the configured values
     /// for day or night mode. It executes multiple commands with error handling:
     /// - Day mode: identity + day gamma
     /// - Night mode: night temperature + night gamma
-    /// 
+    ///
     /// # Arguments
     /// * `state` - TimeState::Day or TimeState::Night
     /// * `config` - Configuration containing temperature and gamma values
     /// * `running` - Atomic flag to check for shutdown requests
-    /// 
+    ///
     /// # Returns
     /// Ok(()) if commands succeed, Err if both commands fail
     pub fn apply_state(
@@ -455,17 +455,17 @@ impl HyprsunsetClient {
     }
 
     /// Apply transition state with interpolated values for smooth color changes.
-    /// 
+    ///
     /// This method handles both stable and transitioning states:
     /// - Stable states: Delegates to apply_state() with mode announcement
     /// - Transitioning states: Calculates interpolated temperature and gamma values
     ///   based on transition progress and applies them smoothly
-    /// 
+    ///
     /// # Arguments
     /// * `state` - TransitionState (stable or transitioning with progress)
     /// * `config` - Configuration for temperature and gamma ranges
     /// * `running` - Atomic flag to check for shutdown requests
-    /// 
+    ///
     /// # Returns
     /// Ok(()) if commands succeed, Err if both commands fail
     pub fn apply_transition_state(
@@ -487,7 +487,7 @@ impl HyprsunsetClient {
                 if Log::is_enabled() {
                     match time_state {
                         TimeState::Day => Log::log_block_start("Entering day mode 󰖨 "),
-                        TimeState::Night => Log::log_block_start("Entering night mode  "),
+                        TimeState::Night => Log::log_block_start("Entering night mode  "),
                     }
                     Log::log_pipe();
                 }
@@ -554,13 +554,13 @@ impl HyprsunsetClient {
     }
 
     /// Helper method for sending temperature commands.
-    /// 
+    ///
     /// Wraps the temperature value in the appropriate command format
     /// and handles error logging.
-    /// 
+    ///
     /// # Arguments
     /// * `temp` - Temperature value in Kelvin
-    /// 
+    ///
     /// # Returns
     /// `true` if command succeeds, `false` if it fails
     fn run_temperature_command(&mut self, temp: u32) -> bool {
@@ -577,13 +577,13 @@ impl HyprsunsetClient {
     }
 
     /// Helper method for sending gamma commands.
-    /// 
+    ///
     /// Wraps the gamma value in the appropriate command format
     /// and handles error logging.
-    /// 
+    ///
     /// # Arguments
     /// * `gamma` - Gamma value as percentage (0.0 to 100.0)
-    /// 
+    ///
     /// # Returns
     /// `true` if command succeeds, `false` if it fails
     fn run_gamma_command(&mut self, gamma: f32) -> bool {
@@ -600,16 +600,16 @@ impl HyprsunsetClient {
     }
 
     /// Calculate interpolated temperature value during transitions.
-    /// 
+    ///
     /// Determines the appropriate start and end temperature values based on
     /// the transition direction and interpolates between them using the progress.
-    /// 
+    ///
     /// # Arguments
     /// * `from` - Starting time state (Day or Night)
     /// * `to` - Target time state (Day or Night)
     /// * `progress` - Transition progress (0.0 to 1.0)
     /// * `config` - Configuration containing temperature values
-    /// 
+    ///
     /// # Returns
     /// Interpolated temperature value in Kelvin
     fn calculate_interpolated_temp(
@@ -642,16 +642,16 @@ impl HyprsunsetClient {
     }
 
     /// Calculate interpolated gamma value during transitions.
-    /// 
+    ///
     /// Determines the appropriate start and end gamma values based on
     /// the transition direction and interpolates between them using the progress.
-    /// 
+    ///
     /// # Arguments
     /// * `from` - Starting time state (Day or Night)
     /// * `to` - Target time state (Day or Night)
     /// * `progress` - Transition progress (0.0 to 1.0)
     /// * `config` - Configuration containing gamma values
-    /// 
+    ///
     /// # Returns
     /// Interpolated gamma value as percentage (0.0 to 100.0)
     fn calculate_interpolated_gamma(
@@ -779,15 +779,15 @@ impl HyprsunsetClient {
 }
 
 /// Classify errors to determine appropriate retry strategy.
-/// 
+///
 /// This function analyzes error messages and types to categorize them into:
 /// - Temporary errors: Should be retried (timeouts, temporary failures)
 /// - Permanent errors: Should not be retried (permission denied, invalid commands)
 /// - Socket gone errors: Indicate hyprsunset may be restarting (connection refused, broken pipe)
-/// 
+///
 /// # Arguments
 /// * `error` - The error to classify
-/// 
+///
 /// # Returns
 /// ErrorType indicating the recommended handling strategy
 fn classify_error(error: &anyhow::Error) -> ErrorType {

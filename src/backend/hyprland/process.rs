@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{hyprsunset::HyprsunsetClient, logger::Log, constants::*};
+use crate::{backend::hyprland::client::HyprsunsetClient, logger::Log, constants::*};
 
 /// Manages the lifecycle of a hyprsunset process started by sunsetr.
 /// 
