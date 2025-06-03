@@ -363,6 +363,7 @@ fn main() -> Result<()> {
                             ) {
                                 Ok(_) => {
                                     if debug_enabled {
+                                        Log::log_pipe();
                                         Log::log_debug(
                                             "Initial state applied successfully (fallback)",
                                         );
@@ -385,6 +386,7 @@ fn main() -> Result<()> {
                     match backend.apply_startup_state(current_transition_state, &config, &running) {
                         Ok(_) => {
                             if debug_enabled {
+                                Log::log_pipe();
                                 Log::log_debug("Initial state applied successfully");
                             }
                         }

@@ -330,7 +330,6 @@ impl HyprsunsetClient {
         match UnixStream::connect(&self.socket_path) {
             Ok(_) => {
                 if self.debug_enabled && enable_logging {
-                    Log::log_pipe();
                     Log::log_debug("Successfully connected to hyprsunset socket");
                 }
                 true

@@ -92,8 +92,7 @@ impl HyprsunsetProcess {
         }
 
         // Give hyprsunset time to initialize its socket and IPC system
-        Log::log_block_start("Waiting for hyprsunset to initialize...");
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_millis(500));
 
         Ok(Self { child })
     }
