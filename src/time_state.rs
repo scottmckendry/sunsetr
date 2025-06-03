@@ -8,8 +8,12 @@ use chrono::{Local, NaiveTime, Timelike};
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::constants::{DEFAULT_TRANSITION_DURATION, DEFAULT_UPDATE_INTERVAL, DEFAULT_DAY_TEMP, DEFAULT_NIGHT_TEMP, DEFAULT_DAY_GAMMA, DEFAULT_NIGHT_GAMMA};
-use crate::utils::{interpolate_u32, interpolate_f32};
+use crate::constants::{
+    DEFAULT_DAY_GAMMA, DEFAULT_DAY_TEMP, DEFAULT_NIGHT_GAMMA, DEFAULT_NIGHT_TEMP,
+    DEFAULT_TRANSITION_DURATION, DEFAULT_UPDATE_INTERVAL,
+};
+// use crate::logger::Log;
+use crate::utils::{interpolate_f32, interpolate_u32};
 
 /// Represents the basic time-based state of the display.
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -30,15 +34,15 @@ pub enum TransitionState {
 }
 
 /// Calculate transition windows for both sunset and sunrise based on the configured mode.
-/// 
+///
 /// This function determines when transitions should start and end based on three modes:
 /// - "finish_by": Transition completes at the configured time
 /// - "start_at": Transition begins at the configured time  
 /// - "center": Transition is centered on the configured time
-/// 
+///
 /// # Arguments
 /// * `config` - Configuration containing sunset/sunrise times and transition settings
-/// 
+///
 /// # Returns
 /// Tuple of (sunset_start, sunset_end, sunrise_start, sunrise_end) as NaiveTime
 fn calculate_transition_windows(config: &Config) -> (NaiveTime, NaiveTime, NaiveTime, NaiveTime) {
@@ -100,14 +104,14 @@ fn calculate_transition_windows(config: &Config) -> (NaiveTime, NaiveTime, Naive
 }
 
 /// Get the current transition state based on the time of day and configuration.
-/// 
+///
 /// This is the main function that determines what state the display should be in.
 /// It calculates transition windows and checks if the current time falls within
 /// any transition period, returning either a stable state or transition progress.
-/// 
+///
 /// # Arguments
 /// * `config` - Configuration containing all timing and transition settings
-/// 
+///
 /// # Returns
 /// TransitionState indicating current state and any transition progress
 pub fn get_transition_state(config: &Config) -> TransitionState {
@@ -140,18 +144,18 @@ pub fn get_transition_state(config: &Config) -> TransitionState {
 }
 
 /// Determine the stable time state for periods outside of transitions.
-/// 
+///
 /// This function handles the logic for determining whether we're in day or night
 /// mode when not actively transitioning. It must handle edge cases like:
 /// - Normal day/night cycles
 /// - Midnight crossings
 /// - Extreme schedules (very short days or nights)
-/// 
+///
 /// # Arguments
 /// * `now` - Current time to evaluate
 /// * `sunset_end` - When sunset transition completes (night mode begins)
 /// * `sunrise_start` - When sunrise transition begins (night mode ends)
-/// 
+///
 /// # Returns
 /// TimeState::Day or TimeState::Night
 fn get_stable_state_for_time(
@@ -190,14 +194,14 @@ fn get_stable_state_for_time(
 }
 
 /// Calculate how long until the next transition event begins.
-/// 
+///
 /// This function determines the appropriate sleep duration for the main loop:
 /// - During transitions: Use the configured update interval for smooth progress
 /// - During stable periods: Sleep until the next transition starts
-/// 
+///
 /// # Arguments
 /// * `config` - Configuration containing update intervals and transition times
-/// 
+///
 /// # Returns
 /// Duration to sleep before the next state check
 pub fn time_until_next_event(config: &Config) -> Duration {
@@ -221,8 +225,9 @@ pub fn time_until_next_event(config: &Config) -> Duration {
                 current_time.hour() * 3600 + current_time.minute() * 60 + current_time.second();
             let sunset_start_secs =
                 sunset_start.hour() * 3600 + sunset_start.minute() * 60 + sunset_start.second();
-            let sunrise_start_secs =
-                _sunrise_start.hour() * 3600 + _sunrise_start.minute() * 60 + _sunrise_start.second();
+            let sunrise_start_secs = _sunrise_start.hour() * 3600
+                + _sunrise_start.minute() * 60
+                + _sunrise_start.second();
 
             // Find the next transition start time
             let seconds_until = if sunset_start_secs > current_secs {
@@ -249,12 +254,12 @@ pub fn time_until_next_event(config: &Config) -> Duration {
 }
 
 /// Calculate transition progress as a value between 0.0 and 1.0.
-/// 
+///
 /// # Arguments
 /// * `now` - Current time within the transition window
 /// * `start` - When the transition began
 /// * `end` - When the transition will complete
-/// 
+///
 /// # Returns
 /// Progress value clamped between 0.0 and 1.0
 fn calculate_progress(now: NaiveTime, start: NaiveTime, end: NaiveTime) -> f32 {
@@ -264,15 +269,15 @@ fn calculate_progress(now: NaiveTime, start: NaiveTime, end: NaiveTime) -> f32 {
 }
 
 /// Check if a time falls within a given range, handling midnight crossings.
-/// 
+///
 /// This function correctly handles cases where the time range crosses midnight
 /// (e.g., 23:00 to 01:00), which is common for night-time periods.
-/// 
+///
 /// # Arguments
 /// * `time` - Time to check
 /// * `start` - Range start time
 /// * `end` - Range end time
-/// 
+///
 /// # Returns
 /// true if time is within the range, false otherwise
 fn is_time_in_range(time: NaiveTime, start: NaiveTime, end: NaiveTime) -> bool {
@@ -289,18 +294,16 @@ fn is_time_in_range(time: NaiveTime, start: NaiveTime, end: NaiveTime) -> bool {
 /// This is used to start hyprsunset with the correct initial values
 pub fn get_initial_values_for_state(state: TransitionState, config: &Config) -> (u32, f32) {
     match state {
-        TransitionState::Stable(time_state) => {
-            match time_state {
-                TimeState::Day => (
-                    config.day_temp.unwrap_or(DEFAULT_DAY_TEMP),
-                    config.day_gamma.unwrap_or(DEFAULT_DAY_GAMMA),
-                ),
-                TimeState::Night => (
-                    config.night_temp.unwrap_or(DEFAULT_NIGHT_TEMP),
-                    config.night_gamma.unwrap_or(DEFAULT_NIGHT_GAMMA),
-                ),
-            }
-        }
+        TransitionState::Stable(time_state) => match time_state {
+            TimeState::Day => (
+                config.day_temp.unwrap_or(DEFAULT_DAY_TEMP),
+                config.day_gamma.unwrap_or(DEFAULT_DAY_GAMMA),
+            ),
+            TimeState::Night => (
+                config.night_temp.unwrap_or(DEFAULT_NIGHT_TEMP),
+                config.night_gamma.unwrap_or(DEFAULT_NIGHT_GAMMA),
+            ),
+        },
         TransitionState::Transitioning { from, to, progress } => {
             let temp = calculate_interpolated_temp(from, to, progress, config);
             let gamma = calculate_interpolated_gamma(from, to, progress, config);
@@ -372,7 +375,10 @@ pub fn calculate_interpolated_gamma(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::{DEFAULT_NIGHT_TEMP, DEFAULT_DAY_TEMP, DEFAULT_NIGHT_GAMMA, DEFAULT_DAY_GAMMA, DEFAULT_UPDATE_INTERVAL};
+    use crate::constants::{
+        DEFAULT_DAY_GAMMA, DEFAULT_DAY_TEMP, DEFAULT_NIGHT_GAMMA, DEFAULT_NIGHT_TEMP,
+        DEFAULT_UPDATE_INTERVAL,
+    };
 
     fn create_test_config(sunset: &str, sunrise: &str, mode: &str, duration_mins: u64) -> Config {
         Config {
@@ -395,8 +401,9 @@ mod tests {
     #[test]
     fn test_calculate_transition_windows_finish_by() {
         let config = create_test_config("19:00:00", "06:00:00", "finish_by", 30);
-        let (sunset_start, sunset_end, sunrise_start, sunrise_end) = calculate_transition_windows(&config);
-        
+        let (sunset_start, sunset_end, sunrise_start, sunrise_end) =
+            calculate_transition_windows(&config);
+
         assert_eq!(sunset_start, NaiveTime::from_hms_opt(18, 30, 0).unwrap());
         assert_eq!(sunset_end, NaiveTime::from_hms_opt(19, 0, 0).unwrap());
         assert_eq!(sunrise_start, NaiveTime::from_hms_opt(5, 30, 0).unwrap());
@@ -406,8 +413,9 @@ mod tests {
     #[test]
     fn test_calculate_transition_windows_start_at() {
         let config = create_test_config("19:00:00", "06:00:00", "start_at", 30);
-        let (sunset_start, sunset_end, sunrise_start, sunrise_end) = calculate_transition_windows(&config);
-        
+        let (sunset_start, sunset_end, sunrise_start, sunrise_end) =
+            calculate_transition_windows(&config);
+
         assert_eq!(sunset_start, NaiveTime::from_hms_opt(19, 0, 0).unwrap());
         assert_eq!(sunset_end, NaiveTime::from_hms_opt(19, 30, 0).unwrap());
         assert_eq!(sunrise_start, NaiveTime::from_hms_opt(6, 0, 0).unwrap());
@@ -417,8 +425,9 @@ mod tests {
     #[test]
     fn test_calculate_transition_windows_center() {
         let config = create_test_config("19:00:00", "06:00:00", "center", 30);
-        let (sunset_start, sunset_end, sunrise_start, sunrise_end) = calculate_transition_windows(&config);
-        
+        let (sunset_start, sunset_end, sunrise_start, sunrise_end) =
+            calculate_transition_windows(&config);
+
         assert_eq!(sunset_start, NaiveTime::from_hms_opt(18, 45, 0).unwrap());
         assert_eq!(sunset_end, NaiveTime::from_hms_opt(19, 15, 0).unwrap());
         assert_eq!(sunrise_start, NaiveTime::from_hms_opt(5, 45, 0).unwrap());
@@ -429,7 +438,7 @@ mod tests {
     fn test_extreme_short_transition() {
         let config = create_test_config("19:00:00", "06:00:00", "finish_by", 5); // 5 minutes
         let (sunset_start, sunset_end, _, _) = calculate_transition_windows(&config);
-        
+
         assert_eq!(sunset_start, NaiveTime::from_hms_opt(18, 55, 0).unwrap());
         assert_eq!(sunset_end, NaiveTime::from_hms_opt(19, 0, 0).unwrap());
     }
@@ -438,7 +447,7 @@ mod tests {
     fn test_extreme_long_transition() {
         let config = create_test_config("19:00:00", "06:00:00", "finish_by", 120); // 2 hours
         let (sunset_start, sunset_end, _, _) = calculate_transition_windows(&config);
-        
+
         assert_eq!(sunset_start, NaiveTime::from_hms_opt(17, 0, 0).unwrap());
         assert_eq!(sunset_end, NaiveTime::from_hms_opt(19, 0, 0).unwrap());
     }
@@ -448,7 +457,7 @@ mod tests {
         // Sunset very late, should cross midnight
         let config = create_test_config("23:30:00", "06:00:00", "start_at", 60); // 1 hour
         let (sunset_start, sunset_end, _, _) = calculate_transition_windows(&config);
-        
+
         assert_eq!(sunset_start, NaiveTime::from_hms_opt(23, 30, 0).unwrap());
         assert_eq!(sunset_end, NaiveTime::from_hms_opt(0, 30, 0).unwrap());
     }
@@ -458,7 +467,7 @@ mod tests {
         // Sunrise very early, transition starts before midnight
         let config = create_test_config("20:00:00", "00:30:00", "finish_by", 60); // 1 hour
         let (_, _, sunrise_start, sunrise_end) = calculate_transition_windows(&config);
-        
+
         assert_eq!(sunrise_start, NaiveTime::from_hms_opt(23, 30, 0).unwrap());
         assert_eq!(sunrise_end, NaiveTime::from_hms_opt(0, 30, 0).unwrap());
     }
@@ -467,12 +476,32 @@ mod tests {
     fn test_is_time_in_range_normal() {
         let start = NaiveTime::from_hms_opt(18, 0, 0).unwrap();
         let end = NaiveTime::from_hms_opt(19, 0, 0).unwrap();
-        
-        assert!(is_time_in_range(NaiveTime::from_hms_opt(18, 30, 0).unwrap(), start, end));
-        assert!(is_time_in_range(NaiveTime::from_hms_opt(18, 0, 0).unwrap(), start, end));
-        assert!(is_time_in_range(NaiveTime::from_hms_opt(19, 0, 0).unwrap(), start, end));
-        assert!(!is_time_in_range(NaiveTime::from_hms_opt(17, 59, 59).unwrap(), start, end));
-        assert!(!is_time_in_range(NaiveTime::from_hms_opt(19, 0, 1).unwrap(), start, end));
+
+        assert!(is_time_in_range(
+            NaiveTime::from_hms_opt(18, 30, 0).unwrap(),
+            start,
+            end
+        ));
+        assert!(is_time_in_range(
+            NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+            start,
+            end
+        ));
+        assert!(is_time_in_range(
+            NaiveTime::from_hms_opt(19, 0, 0).unwrap(),
+            start,
+            end
+        ));
+        assert!(!is_time_in_range(
+            NaiveTime::from_hms_opt(17, 59, 59).unwrap(),
+            start,
+            end
+        ));
+        assert!(!is_time_in_range(
+            NaiveTime::from_hms_opt(19, 0, 1).unwrap(),
+            start,
+            end
+        ));
     }
 
     #[test]
@@ -480,24 +509,60 @@ mod tests {
         // Range that crosses midnight: 23:00 to 01:00
         let start = NaiveTime::from_hms_opt(23, 0, 0).unwrap();
         let end = NaiveTime::from_hms_opt(1, 0, 0).unwrap();
-        
-        assert!(is_time_in_range(NaiveTime::from_hms_opt(23, 30, 0).unwrap(), start, end));
-        assert!(is_time_in_range(NaiveTime::from_hms_opt(0, 30, 0).unwrap(), start, end));
-        assert!(is_time_in_range(NaiveTime::from_hms_opt(23, 0, 0).unwrap(), start, end));
-        assert!(is_time_in_range(NaiveTime::from_hms_opt(1, 0, 0).unwrap(), start, end));
-        assert!(!is_time_in_range(NaiveTime::from_hms_opt(2, 0, 0).unwrap(), start, end));
-        assert!(!is_time_in_range(NaiveTime::from_hms_opt(22, 59, 59).unwrap(), start, end));
+
+        assert!(is_time_in_range(
+            NaiveTime::from_hms_opt(23, 30, 0).unwrap(),
+            start,
+            end
+        ));
+        assert!(is_time_in_range(
+            NaiveTime::from_hms_opt(0, 30, 0).unwrap(),
+            start,
+            end
+        ));
+        assert!(is_time_in_range(
+            NaiveTime::from_hms_opt(23, 0, 0).unwrap(),
+            start,
+            end
+        ));
+        assert!(is_time_in_range(
+            NaiveTime::from_hms_opt(1, 0, 0).unwrap(),
+            start,
+            end
+        ));
+        assert!(!is_time_in_range(
+            NaiveTime::from_hms_opt(2, 0, 0).unwrap(),
+            start,
+            end
+        ));
+        assert!(!is_time_in_range(
+            NaiveTime::from_hms_opt(22, 59, 59).unwrap(),
+            start,
+            end
+        ));
     }
 
     #[test]
     fn test_calculate_progress() {
         let start = NaiveTime::from_hms_opt(18, 0, 0).unwrap();
         let end = NaiveTime::from_hms_opt(19, 0, 0).unwrap(); // 1 hour duration
-        
-        assert_eq!(calculate_progress(NaiveTime::from_hms_opt(18, 0, 0).unwrap(), start, end), 0.0);
-        assert_eq!(calculate_progress(NaiveTime::from_hms_opt(19, 0, 0).unwrap(), start, end), 1.0);
-        assert_eq!(calculate_progress(NaiveTime::from_hms_opt(18, 30, 0).unwrap(), start, end), 0.5);
-        assert_eq!(calculate_progress(NaiveTime::from_hms_opt(18, 15, 0).unwrap(), start, end), 0.25);
+
+        assert_eq!(
+            calculate_progress(NaiveTime::from_hms_opt(18, 0, 0).unwrap(), start, end),
+            0.0
+        );
+        assert_eq!(
+            calculate_progress(NaiveTime::from_hms_opt(19, 0, 0).unwrap(), start, end),
+            1.0
+        );
+        assert_eq!(
+            calculate_progress(NaiveTime::from_hms_opt(18, 30, 0).unwrap(), start, end),
+            0.5
+        );
+        assert_eq!(
+            calculate_progress(NaiveTime::from_hms_opt(18, 15, 0).unwrap(), start, end),
+            0.25
+        );
     }
 
     #[test]
@@ -505,21 +570,36 @@ mod tests {
         // Normal case: sunset ends at 19:00, sunrise starts at 06:00
         let sunset_end = NaiveTime::from_hms_opt(19, 0, 0).unwrap();
         let sunrise_start = NaiveTime::from_hms_opt(6, 0, 0).unwrap();
-        
+
         // Day time
-        assert_eq!(get_stable_state_for_time(
-            NaiveTime::from_hms_opt(10, 0, 0).unwrap(), sunset_end, sunrise_start
-        ), TimeState::Day);
-        
+        assert_eq!(
+            get_stable_state_for_time(
+                NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+                sunset_end,
+                sunrise_start
+            ),
+            TimeState::Day
+        );
+
         // Night time
-        assert_eq!(get_stable_state_for_time(
-            NaiveTime::from_hms_opt(22, 0, 0).unwrap(), sunset_end, sunrise_start
-        ), TimeState::Night);
-        
+        assert_eq!(
+            get_stable_state_for_time(
+                NaiveTime::from_hms_opt(22, 0, 0).unwrap(),
+                sunset_end,
+                sunrise_start
+            ),
+            TimeState::Night
+        );
+
         // Early morning night
-        assert_eq!(get_stable_state_for_time(
-            NaiveTime::from_hms_opt(3, 0, 0).unwrap(), sunset_end, sunrise_start
-        ), TimeState::Night);
+        assert_eq!(
+            get_stable_state_for_time(
+                NaiveTime::from_hms_opt(3, 0, 0).unwrap(),
+                sunset_end,
+                sunrise_start
+            ),
+            TimeState::Night
+        );
     }
 
     #[test]
@@ -527,16 +607,26 @@ mod tests {
         // Very short night: sunset at 23:00, sunrise at 01:00 (2 hour night)
         let config = create_test_config("23:00:00", "01:00:00", "finish_by", 30);
         let (_, sunset_end, sunrise_start, _) = calculate_transition_windows(&config);
-        
+
         // Should be day most of the time
-        assert_eq!(get_stable_state_for_time(
-            NaiveTime::from_hms_opt(12, 0, 0).unwrap(), sunset_end, sunrise_start
-        ), TimeState::Day);
-        
+        assert_eq!(
+            get_stable_state_for_time(
+                NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+                sunset_end,
+                sunrise_start
+            ),
+            TimeState::Day
+        );
+
         // Should be night for the short period
-        assert_eq!(get_stable_state_for_time(
-            NaiveTime::from_hms_opt(0, 0, 0).unwrap(), sunset_end, sunrise_start
-        ), TimeState::Night);
+        assert_eq!(
+            get_stable_state_for_time(
+                NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                sunset_end,
+                sunrise_start
+            ),
+            TimeState::Night
+        );
     }
 
     #[test]
@@ -544,28 +634,39 @@ mod tests {
         // Very short day: sunset at 01:00, sunrise at 23:00 (2 hour day)
         let config = create_test_config("01:00:00", "23:00:00", "finish_by", 30);
         let (_, sunset_end, sunrise_start, _) = calculate_transition_windows(&config);
-        
+
         // Should be night most of the time
-        assert_eq!(get_stable_state_for_time(
-            NaiveTime::from_hms_opt(12, 0, 0).unwrap(), sunset_end, sunrise_start
-        ), TimeState::Night);
-        
+        assert_eq!(
+            get_stable_state_for_time(
+                NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+                sunset_end,
+                sunrise_start
+            ),
+            TimeState::Night
+        );
+
         // Should be day for the short period
-        assert_eq!(get_stable_state_for_time(
-            NaiveTime::from_hms_opt(0, 0, 0).unwrap(), sunset_end, sunrise_start
-        ), TimeState::Day);
+        assert_eq!(
+            get_stable_state_for_time(
+                NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                sunset_end,
+                sunrise_start
+            ),
+            TimeState::Day
+        );
     }
 
     #[test]
     fn test_transition_state_detection() {
         let config = create_test_config("19:00:00", "06:00:00", "finish_by", 30);
-        
+
         // Mock current time using a specific test helper function would be better,
         // but for now we test the components individually which is covered above
-        
+
         // Test the windows calculation which drives the state detection
-        let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) = calculate_transition_windows(&config);
-        
+        let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) =
+            calculate_transition_windows(&config);
+
         // Test that we get expected transition windows
         assert_eq!(sunset_start, NaiveTime::from_hms_opt(18, 30, 0).unwrap());
         assert_eq!(sunset_end, NaiveTime::from_hms_opt(19, 0, 0).unwrap());
@@ -576,62 +677,77 @@ mod tests {
         // Reproduce the user's exact configuration that shows the bug
         // Sunset: 17:06:00, Sunrise: 06:00:00, Transition: 5 minutes, Mode: center
         let config = create_test_config("17:06:00", "06:00:00", "center", 5);
-        
+
         println!("=== Testing Center Mode Bug ===");
-        
+
         // Test different times around the sunset transition
         let test_times = vec![
             ("17:03:00", "Before sunset transition - should be DAY"),
-            ("17:05:00", "During sunset transition - should be TRANSITIONING"),
+            (
+                "17:05:00",
+                "During sunset transition - should be TRANSITIONING",
+            ),
             ("17:06:00", "Exact sunset time - should be TRANSITIONING"),
-            ("17:07:00", "During sunset transition - should be TRANSITIONING"),
+            (
+                "17:07:00",
+                "During sunset transition - should be TRANSITIONING",
+            ),
             ("17:09:00", "After sunset transition - should be NIGHT"),
         ];
-        
+
         // Calculate expected transition windows for center mode
         let sunset = NaiveTime::parse_from_str("17:06:00", "%H:%M:%S").unwrap();
         let _sunrise = NaiveTime::parse_from_str("06:00:00", "%H:%M:%S").unwrap();
         let transition_duration = std::time::Duration::from_secs(5 * 60); // 5 minutes
         let half_transition = transition_duration / 2;
         let half_chrono = chrono::Duration::from_std(half_transition).unwrap();
-        
-        let sunset_start = sunset - half_chrono;  // 17:03:30
-        let sunset_end = sunset + half_chrono;    // 17:08:30
-        
-        println!("Expected sunset transition window: {} to {}", sunset_start, sunset_end);
-        
+
+        let sunset_start = sunset - half_chrono; // 17:03:30
+        let sunset_end = sunset + half_chrono; // 17:08:30
+
+        println!(
+            "Expected sunset transition window: {} to {}",
+            sunset_start, sunset_end
+        );
+
         for (time_str, description) in test_times {
             // Temporarily override the current time by creating a modified config
             // We'll simulate different times by checking the logic directly
             let test_time = NaiveTime::parse_from_str(time_str, "%H:%M:%S").unwrap();
-            
+
             // Manually calculate what the state should be
-            let (sunset_start_calc, sunset_end_calc, _sunrise_start_calc, _sunrise_end_calc) = 
+            let (sunset_start_calc, sunset_end_calc, _sunrise_start_calc, _sunrise_end_calc) =
                 calculate_transition_windows(&config);
-            
-            let in_sunset_transition = is_time_in_range(test_time, sunset_start_calc, sunset_end_calc);
-            let in_sunrise_transition = is_time_in_range(test_time, _sunrise_start_calc, _sunrise_end_calc);
-            
+
+            let in_sunset_transition =
+                is_time_in_range(test_time, sunset_start_calc, sunset_end_calc);
+            let in_sunrise_transition =
+                is_time_in_range(test_time, _sunrise_start_calc, _sunrise_end_calc);
+
             let expected_state = if in_sunset_transition {
                 "SUNSET TRANSITION"
             } else if in_sunrise_transition {
-                "SUNRISE TRANSITION" 
+                "SUNRISE TRANSITION"
             } else {
-                let stable_state = get_stable_state_for_time(test_time, sunset_end_calc, _sunrise_start_calc);
+                let stable_state =
+                    get_stable_state_for_time(test_time, sunset_end_calc, _sunrise_start_calc);
                 match stable_state {
                     TimeState::Day => "DAY",
                     TimeState::Night => "NIGHT",
                 }
             };
-            
+
             println!("Time {}: {} ({})", time_str, expected_state, description);
-            
+
             // The bug: times before/after sunset transition might incorrectly show NIGHT
             // when they should show DAY (before) or be in transition
             match time_str {
                 "17:03:00" => {
                     // Before transition - should be DAY
-                    assert!(!in_sunset_transition, "17:03:00 should not be in sunset transition");
+                    assert!(
+                        !in_sunset_transition,
+                        "17:03:00 should not be in sunset transition"
+                    );
                     if expected_state == "NIGHT" {
                         println!("  ❌ BUG DETECTED: Should be DAY, but got NIGHT");
                     }
@@ -639,14 +755,23 @@ mod tests {
                 "17:05:00" | "17:06:00" | "17:07:00" => {
                     // During transition - should be TRANSITIONING
                     if !in_sunset_transition {
-                        println!("  ❌ BUG DETECTED: Should be in SUNSET TRANSITION, but got {}", expected_state);
+                        println!(
+                            "  ❌ BUG DETECTED: Should be in SUNSET TRANSITION, but got {}",
+                            expected_state
+                        );
                     }
                 }
                 "17:09:00" => {
                     // After transition - should be NIGHT
-                    assert!(!in_sunset_transition, "17:09:00 should not be in sunset transition");
+                    assert!(
+                        !in_sunset_transition,
+                        "17:09:00 should not be in sunset transition"
+                    );
                     if expected_state != "NIGHT" {
-                        println!("  ❌ BUG DETECTED: Should be NIGHT, but got {}", expected_state);
+                        println!(
+                            "  ❌ BUG DETECTED: Should be NIGHT, but got {}",
+                            expected_state
+                        );
                     }
                 }
                 _ => {}
@@ -660,9 +785,9 @@ mod tests {
         // Sunset: 17:06:00, Transition: 5 minutes, Mode: center
         // Window: 17:03:30 to 17:08:30
         let config = create_test_config("17:06:00", "06:00:00", "center", 5);
-        
+
         println!("=== Testing Center Mode Timing Edge Cases ===");
-        
+
         // Test times that are just at the edge of transition windows
         let edge_times = vec![
             ("17:03:29", "1 second before transition starts"),
@@ -672,20 +797,21 @@ mod tests {
             ("17:08:30", "Exact transition end"),
             ("17:08:31", "1 second after transition ends"),
         ];
-        
-        let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) = calculate_transition_windows(&config);
+
+        let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) =
+            calculate_transition_windows(&config);
         println!("Transition window: {} to {}", sunset_start, sunset_end);
-        
+
         for (time_str, description) in edge_times {
             let test_time = NaiveTime::parse_from_str(time_str, "%H:%M:%S").unwrap();
-            
+
             let in_sunset_transition = is_time_in_range(test_time, sunset_start, sunset_end);
             let in_sunrise_transition = is_time_in_range(test_time, _sunrise_start, _sunrise_end);
-            
+
             let state = if in_sunset_transition {
                 "SUNSET TRANSITION"
             } else if in_sunrise_transition {
-                "SUNRISE TRANSITION" 
+                "SUNRISE TRANSITION"
             } else {
                 let stable_state = get_stable_state_for_time(test_time, sunset_end, _sunrise_start);
                 match stable_state {
@@ -693,9 +819,9 @@ mod tests {
                     TimeState::Night => "NIGHT",
                 }
             };
-            
+
             println!("Time {}: {} ({})", time_str, state, description);
-            
+
             // Check for unexpected behavior at boundaries
             match time_str {
                 "17:03:29" => {
@@ -705,12 +831,16 @@ mod tests {
                 }
                 "17:03:30" | "17:03:31" => {
                     if state != "SUNSET TRANSITION" {
-                        println!("  ⚠️  POTENTIAL ISSUE: Expected SUNSET TRANSITION at start boundary");
+                        println!(
+                            "  ⚠️  POTENTIAL ISSUE: Expected SUNSET TRANSITION at start boundary"
+                        );
                     }
                 }
                 "17:08:29" | "17:08:30" => {
                     if state != "SUNSET TRANSITION" {
-                        println!("  ⚠️  POTENTIAL ISSUE: Expected SUNSET TRANSITION at end boundary");
+                        println!(
+                            "  ⚠️  POTENTIAL ISSUE: Expected SUNSET TRANSITION at end boundary"
+                        );
                     }
                 }
                 "17:08:31" => {
@@ -721,13 +851,19 @@ mod tests {
                 _ => {}
             }
         }
-        
+
         // Test the specific scenario: what happens if we're right at sunset time in center mode?
         let exact_sunset = NaiveTime::parse_from_str("17:06:00", "%H:%M:%S").unwrap();
         let in_transition = is_time_in_range(exact_sunset, sunset_start, sunset_end);
-        println!("\nAt exact sunset time (17:06:00): {}", 
-                 if in_transition { "IN TRANSITION" } else { "NOT IN TRANSITION" });
-        
+        println!(
+            "\nAt exact sunset time (17:06:00): {}",
+            if in_transition {
+                "IN TRANSITION"
+            } else {
+                "NOT IN TRANSITION"
+            }
+        );
+
         if !in_transition {
             println!("  ❌ BUG FOUND: Exact sunset time should be in transition for center mode!");
         }
@@ -737,56 +873,70 @@ mod tests {
     fn test_center_mode_precision_issue() {
         // Test with the exact user configuration
         let config = create_test_config("17:06:00", "06:00:00", "center", 5);
-        
+
         println!("=== Testing Center Mode Precision Issue ===");
-        
+
         // Calculate transition windows
-        let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) = calculate_transition_windows(&config);
-        
+        let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) =
+            calculate_transition_windows(&config);
+
         println!("Sunset: 17:06:00");
         println!("Transition duration: 5 minutes");
         println!("Center mode window: {} to {}", sunset_start, sunset_end);
-        
+
         // Check what the actual calculated times are
         println!("Sunset start: {:?}", sunset_start);
         println!("Sunset end: {:?}", sunset_end);
         println!("Sunrise start: {:?}", _sunrise_start);
         println!("Sunrise end: {:?}", _sunrise_end);
-        
+
         // Test the exact sunset time and nearby times
-        let test_times = [
-            "17:05:59", "17:06:00", "17:06:01"
-        ];
-        
+        let test_times = ["17:05:59", "17:06:00", "17:06:01"];
+
         for time_str in test_times {
             let test_time = NaiveTime::parse_from_str(time_str, "%H:%M:%S").unwrap();
             let in_sunset = is_time_in_range(test_time, sunset_start, sunset_end);
             let in_sunrise = is_time_in_range(test_time, _sunrise_start, _sunrise_end);
-            
-            println!("Time {}: sunset={}, sunrise={}", time_str, in_sunset, in_sunrise);
-            
+
+            println!(
+                "Time {}: sunset={}, sunrise={}",
+                time_str, in_sunset, in_sunrise
+            );
+
             if !in_sunset && !in_sunrise {
                 let stable_state = get_stable_state_for_time(test_time, sunset_end, _sunrise_start);
                 println!("  -> Stable state: {:?}", stable_state);
             }
         }
-        
+
         // The critical test: is 17:06:00 actually in the sunset transition?
         let exact_sunset = NaiveTime::parse_from_str("17:06:00", "%H:%M:%S").unwrap();
         let should_be_in_transition = is_time_in_range(exact_sunset, sunset_start, sunset_end);
-        println!("\nCRITICAL: Is 17:06:00 in sunset transition? {}", should_be_in_transition);
-        
+        println!(
+            "\nCRITICAL: Is 17:06:00 in sunset transition? {}",
+            should_be_in_transition
+        );
+
         if !should_be_in_transition {
             println!("❌ FOUND THE BUG: 17:06:00 should be in transition for center mode!");
-            
+
             // Let's see what the stable state logic thinks
             let stable_state = get_stable_state_for_time(exact_sunset, sunset_end, _sunrise_start);
             println!("   Stable state logic says: {:?}", stable_state);
-            
+
             // And let's see the exact boundary times in seconds
-            println!("   Sunset start seconds: {}", sunset_start.hour() * 3600 + sunset_start.minute() * 60 + sunset_start.second());
-            println!("   Test time seconds: {}", exact_sunset.hour() * 3600 + exact_sunset.minute() * 60 + exact_sunset.second());
-            println!("   Sunset end seconds: {}", sunset_end.hour() * 3600 + sunset_end.minute() * 60 + sunset_end.second());
+            println!(
+                "   Sunset start seconds: {}",
+                sunset_start.hour() * 3600 + sunset_start.minute() * 60 + sunset_start.second()
+            );
+            println!(
+                "   Test time seconds: {}",
+                exact_sunset.hour() * 3600 + exact_sunset.minute() * 60 + exact_sunset.second()
+            );
+            println!(
+                "   Sunset end seconds: {}",
+                sunset_end.hour() * 3600 + sunset_end.minute() * 60 + sunset_end.second()
+            );
         }
     }
 
@@ -794,9 +944,9 @@ mod tests {
     fn test_startup_transition_flow_bug() {
         // Simulate the exact flow that happens in the real application
         let config = create_test_config("17:06:00", "06:00:00", "center", 5);
-        
+
         println!("=== Testing Startup Transition Flow ===");
-        
+
         // Test times that the user mentioned as problematic:
         // "before or after the centered time" (17:06:00)
         let problematic_times = [
@@ -804,15 +954,16 @@ mod tests {
             "17:07:00", // After centered time, but should still be in transition
             "17:06:00", // Exact centered time - user says this works
         ];
-        
+
         for time_str in problematic_times {
             println!("\n--- Testing startup at {} ---", time_str);
-            
+
             // Step 1: Get initial state (what StartupTransition::new would capture)
             // We'll simulate this by manually checking the state at this time
             let test_time = NaiveTime::parse_from_str(time_str, "%H:%M:%S").unwrap();
-            let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) = calculate_transition_windows(&config);
-            
+            let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) =
+                calculate_transition_windows(&config);
+
             let initial_state = if is_time_in_range(test_time, sunset_start, sunset_end) {
                 let progress = calculate_progress(test_time, sunset_start, sunset_end);
                 TransitionState::Transitioning {
@@ -831,17 +982,19 @@ mod tests {
                 let stable_state = get_stable_state_for_time(test_time, sunset_end, _sunrise_start);
                 TransitionState::Stable(stable_state)
             };
-            
+
             println!("Initial state at {}: {:?}", time_str, initial_state);
-            
+
             // Step 2: Simulate 10 seconds later (after startup transition)
             // Add 10 seconds to the test time
-            let seconds_since_midnight = test_time.hour() * 3600 + test_time.minute() * 60 + test_time.second();
+            let seconds_since_midnight =
+                test_time.hour() * 3600 + test_time.minute() * 60 + test_time.second();
             let final_seconds = (seconds_since_midnight + 10) % (24 * 3600); // Handle midnight wrap
-            let final_time = NaiveTime::from_num_seconds_from_midnight_opt(final_seconds, 0).unwrap();
-            
+            let final_time =
+                NaiveTime::from_num_seconds_from_midnight_opt(final_seconds, 0).unwrap();
+
             println!("Time after 10s startup transition: {}", final_time);
-            
+
             // Step 3: Get final state (what gets applied after startup transition)
             let final_state = if is_time_in_range(final_time, sunset_start, sunset_end) {
                 let progress = calculate_progress(final_time, sunset_start, sunset_end);
@@ -858,20 +1011,31 @@ mod tests {
                     progress,
                 }
             } else {
-                let stable_state = get_stable_state_for_time(final_time, sunset_end, _sunrise_start);
+                let stable_state =
+                    get_stable_state_for_time(final_time, sunset_end, _sunrise_start);
                 TransitionState::Stable(stable_state)
             };
-            
+
             println!("Final state at {}: {:?}", final_time, final_state);
-            
+
             // Check for the bug: if initial was transitioning but final is stable night
             match (initial_state, final_state) {
-                (TransitionState::Transitioning { from: TimeState::Day, to: TimeState::Night, .. }, 
-                 TransitionState::Stable(TimeState::Night)) => {
-                    println!("  ❌ BUG DETECTED: Started in sunset transition but ended in stable night mode!");
+                (
+                    TransitionState::Transitioning {
+                        from: TimeState::Day,
+                        to: TimeState::Night,
+                        ..
+                    },
+                    TransitionState::Stable(TimeState::Night),
+                ) => {
+                    println!(
+                        "  ❌ BUG DETECTED: Started in sunset transition but ended in stable night mode!"
+                    );
                 }
                 (TransitionState::Transitioning { .. }, TransitionState::Stable(_)) => {
-                    println!("  ⚠️  POTENTIAL ISSUE: Started in transition but ended in stable mode");
+                    println!(
+                        "  ⚠️  POTENTIAL ISSUE: Started in transition but ended in stable mode"
+                    );
                 }
                 (TransitionState::Stable(_), TransitionState::Transitioning { .. }) => {
                     println!("  ✓ Started stable, ended transitioning - this is normal");
@@ -887,61 +1051,76 @@ mod tests {
     fn test_transition_boundary_edge_cases() {
         // Test what happens at the exact boundaries of the transition window
         let config = create_test_config("17:06:00", "06:00:00", "center", 5);
-        
+
         println!("=== Testing Transition Boundary Edge Cases ===");
-        
-        let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) = calculate_transition_windows(&config);
-        println!("Sunset transition window: {} to {}", sunset_start, sunset_end);
-        
+
+        let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) =
+            calculate_transition_windows(&config);
+        println!(
+            "Sunset transition window: {} to {}",
+            sunset_start, sunset_end
+        );
+
         // Test at the exact boundaries
         let boundary_times = [
             "17:03:29", // 1 second before transition starts
-            "17:03:30", // Exact transition start  
+            "17:03:30", // Exact transition start
             "17:08:30", // Exact transition end
             "17:08:31", // 1 second after transition ends
         ];
-        
+
         for time_str in boundary_times {
             println!("\n--- Testing at {} ---", time_str);
-            
+
             let test_time = NaiveTime::parse_from_str(time_str, "%H:%M:%S").unwrap();
             let in_sunset = is_time_in_range(test_time, sunset_start, sunset_end);
-            
+
             if in_sunset {
                 let progress = calculate_progress(test_time, sunset_start, sunset_end);
                 println!("  State: SUNSET TRANSITION (progress: {:.3})", progress);
             } else {
                 let stable_state = get_stable_state_for_time(test_time, sunset_end, _sunrise_start);
                 println!("  State: STABLE {:?}", stable_state);
-                
+
                 // Check if this could be the source of the bug
                 if time_str == "17:03:29" && stable_state == TimeState::Night {
-                    println!("  ❌ POTENTIAL BUG: Just before transition shows NIGHT instead of DAY!");
+                    println!(
+                        "  ❌ POTENTIAL BUG: Just before transition shows NIGHT instead of DAY!"
+                    );
                 }
                 if time_str == "17:08:31" && stable_state != TimeState::Night {
                     println!("  ⚠️  UNEXPECTED: Just after transition should be NIGHT");
                 }
             }
-            
+
             // Test what happens 10 seconds later (simulating startup delay)
-            let seconds_since_midnight = test_time.hour() * 3600 + test_time.minute() * 60 + test_time.second();
+            let seconds_since_midnight =
+                test_time.hour() * 3600 + test_time.minute() * 60 + test_time.second();
             let future_seconds = (seconds_since_midnight + 10) % (24 * 3600);
-            let future_time = NaiveTime::from_num_seconds_from_midnight_opt(future_seconds, 0).unwrap();
-            
+            let future_time =
+                NaiveTime::from_num_seconds_from_midnight_opt(future_seconds, 0).unwrap();
+
             let future_in_sunset = is_time_in_range(future_time, sunset_start, sunset_end);
-            
+
             if future_in_sunset {
                 let progress = calculate_progress(future_time, sunset_start, sunset_end);
-                println!("  After 10s ({}): SUNSET TRANSITION (progress: {:.3})", future_time, progress);
+                println!(
+                    "  After 10s ({}): SUNSET TRANSITION (progress: {:.3})",
+                    future_time, progress
+                );
             } else {
-                let stable_state = get_stable_state_for_time(future_time, sunset_end, _sunrise_start);
+                let stable_state =
+                    get_stable_state_for_time(future_time, sunset_end, _sunrise_start);
                 println!("  After 10s ({}): STABLE {:?}", future_time, stable_state);
             }
-            
+
             // Check for problematic transitions
             if in_sunset && !future_in_sunset {
-                println!("  ❌ FOUND ISSUE: Started in transition but ended in stable state after 10s!");
-                let stable_state = get_stable_state_for_time(future_time, sunset_end, _sunrise_start);
+                println!(
+                    "  ❌ FOUND ISSUE: Started in transition but ended in stable state after 10s!"
+                );
+                let stable_state =
+                    get_stable_state_for_time(future_time, sunset_end, _sunrise_start);
                 if stable_state == TimeState::Night {
                     println!("     This matches the user's bug report!");
                 }
@@ -953,22 +1132,26 @@ mod tests {
     fn test_startup_transition_timing_fix() {
         // Test the fix for the startup transition timing bug
         let config = create_test_config("17:06:00", "06:00:00", "center", 5);
-        
+
         println!("=== Testing Startup Transition Timing Fix ===");
-        
+
         // Simulate starting at a time that's in transition but close to the boundary
         let problematic_start_time = "17:08:25"; // 5 seconds before end of transition
         let test_time = NaiveTime::parse_from_str(problematic_start_time, "%H:%M:%S").unwrap();
-        
-        let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) = calculate_transition_windows(&config);
+
+        let (sunset_start, sunset_end, _sunrise_start, _sunrise_end) =
+            calculate_transition_windows(&config);
         println!("Transition window: {} to {}", sunset_start, sunset_end);
         println!("Starting program at: {}", problematic_start_time);
-        
+
         // Check initial state (what gets captured)
         let initial_in_transition = is_time_in_range(test_time, sunset_start, sunset_end);
         let initial_state = if initial_in_transition {
             let progress = calculate_progress(test_time, sunset_start, sunset_end);
-            println!("Initial state: SUNSET TRANSITION (progress: {:.3})", progress);
+            println!(
+                "Initial state: SUNSET TRANSITION (progress: {:.3})",
+                progress
+            );
             TransitionState::Transitioning {
                 from: TimeState::Day,
                 to: TimeState::Night,
@@ -978,34 +1161,50 @@ mod tests {
             println!("Initial state: NOT in transition (this would be unexpected)");
             TransitionState::Stable(TimeState::Day) // placeholder
         };
-        
+
         // Check what happens 10 seconds later (after startup transition)
-        let seconds_since_midnight = test_time.hour() * 3600 + test_time.minute() * 60 + test_time.second();
+        let seconds_since_midnight =
+            test_time.hour() * 3600 + test_time.minute() * 60 + test_time.second();
         let final_seconds = (seconds_since_midnight + 10) % (24 * 3600);
         let final_time = NaiveTime::from_num_seconds_from_midnight_opt(final_seconds, 0).unwrap();
-        
+
         println!("Time after 10s startup: {}", final_time);
-        
+
         let final_in_transition = is_time_in_range(final_time, sunset_start, sunset_end);
         if final_in_transition {
             let progress = calculate_progress(final_time, sunset_start, sunset_end);
-            println!("Recalculated state: SUNSET TRANSITION (progress: {:.3})", progress);
+            println!(
+                "Recalculated state: SUNSET TRANSITION (progress: {:.3})",
+                progress
+            );
         } else {
             println!("Recalculated state: NOT in transition");
         }
-        
+
         // The bug scenario
         if initial_in_transition && !final_in_transition {
             println!("❌ BUG SCENARIO DETECTED:");
             println!("   - Started in transition at {}", problematic_start_time);
-            println!("   - 10 seconds later ({}), no longer in transition", final_time);
-            println!("   - Old code would apply NIGHT mode instead of continuing the sunset transition");
+            println!(
+                "   - 10 seconds later ({}), no longer in transition",
+                final_time
+            );
+            println!(
+                "   - Old code would apply NIGHT mode instead of continuing the sunset transition"
+            );
             println!("   - Fixed code applies the originally captured transition state");
-            
+
             // Verify the fix behavior
             match initial_state {
-                TransitionState::Transitioning { from: TimeState::Day, to: TimeState::Night, progress } => {
-                    println!("✅ FIX: Will correctly apply sunset transition with progress {:.3}", progress);
+                TransitionState::Transitioning {
+                    from: TimeState::Day,
+                    to: TimeState::Night,
+                    progress,
+                } => {
+                    println!(
+                        "✅ FIX: Will correctly apply sunset transition with progress {:.3}",
+                        progress
+                    );
                 }
                 _ => {
                     println!("❌ Unexpected initial state");

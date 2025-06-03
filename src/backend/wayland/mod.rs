@@ -341,7 +341,7 @@ impl ColorTemperatureBackend for WaylandBackend {
     ) -> Result<()> {
         let (temp, gamma) = crate::time_state::get_initial_values_for_state(state, config);
         if self.debug_enabled {
-            Log::log_block_start(&format!(
+            Log::log_debug(&format!(
                 "Wayland backend applying state: temp={}K, gamma={:.1}%",
                 temp, gamma
             ));

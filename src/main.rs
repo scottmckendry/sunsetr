@@ -98,17 +98,16 @@ impl Drop for TerminalGuard {
 /// Displays version information using custom logging style.
 fn display_version_info() {
     Log::log_version();
+    Log::log_pipe();
     println!("┗ {}", env!("CARGO_PKG_DESCRIPTION"));
 }
 
 /// Displays custom help message using logger methods.
 fn display_custom_help() {
     Log::log_version();
-    Log::log_decorated(env!("CARGO_PKG_DESCRIPTION"));
-    Log::log_pipe();
-    Log::log_decorated("Usage: sunsetr [OPTIONS]");
-    Log::log_pipe();
-    Log::log_decorated("Options:");
+    Log::log_block_start(env!("CARGO_PKG_DESCRIPTION"));
+    Log::log_block_start("Usage: sunsetr [OPTIONS]");
+    Log::log_block_start("Options:");
     Log::log_indented("-d, --debug          Enable detailed debug output");
     Log::log_indented("-h, --help           Print help information");
     Log::log_indented("-V, --version        Print version information");
@@ -181,7 +180,6 @@ fn should_update_state(
                 _ => "transition",
             };
             Log::log_block_start(&format!("Commencing {}", transition_type));
-            Log::log_pipe();
             true
         }
         // Detect change from transitioning to stable state (transition completed)
@@ -271,8 +269,8 @@ fn main() -> Result<()> {
 
     // Log debug mode status
     if debug_enabled {
-        Log::log_debug("Debug mode enabled - showing detailed backend operations");
         Log::log_pipe();
+        Log::log_debug("Debug mode enabled - showing detailed backend operations");
     }
 
     // Set up signal handling
@@ -315,7 +313,7 @@ fn main() -> Result<()> {
     // Try to acquire exclusive lock (should succeed since we checked above, but race conditions possible)
     match lock_file.try_lock_exclusive() {
         Ok(_) => {
-            Log::log_decorated("Lock acquired, starting sunsetr...");
+            Log::log_block_start("Lock acquired, starting sunsetr...");
 
             // Log configuration after acquiring lock
             config.log_config();
@@ -403,6 +401,9 @@ fn main() -> Result<()> {
             // Main loop with transition support and sleep/resume detection
             // Skip first iteration to prevent false state change detection due to startup timing
             let mut first_iteration = true;
+            // Tracks if the initial transition progress log has been made using `log_block_start`.
+            // Subsequent transition progress logs will use `log_decorated` when debug is disabled.
+            let mut first_transition_log_done = false;
             while running.load(Ordering::SeqCst) {
                 // Detect large time jumps (system sleep/resume scenarios)
                 let current_time = Instant::now();
@@ -474,13 +475,22 @@ fn main() -> Result<()> {
                 // Show next update timing with more context
                 match new_state {
                     TransitionState::Transitioning { progress, .. } => {
-                        Log::log_decorated(&format!(
+                        let log_message = format!(
                             "Transition {}% complete. Next update in {} seconds",
                             (progress * 100.0) as u8,
                             sleep_duration.as_secs()
-                        ));
+                        );
+                        if debug_enabled {
+                            Log::log_block_start(&log_message);
+                        } else if !first_transition_log_done {
+                            Log::log_block_start(&log_message);
+                            first_transition_log_done = true;
+                        } else {
+                            Log::log_decorated(&log_message);
+                        }
                     }
                     TransitionState::Stable(_) => {
+                        first_transition_log_done = false; // Reset for the next transition period
                         Log::log_block_start(&format!(
                             "Next transition in {} minutes {} seconds",
                             sleep_duration.as_secs() / 60,

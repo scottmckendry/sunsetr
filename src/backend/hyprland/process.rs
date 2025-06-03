@@ -19,10 +19,10 @@ use std::{
     time::Duration,
 };
 
-use crate::{backend::hyprland::client::HyprsunsetClient, logger::Log, constants::*};
+use crate::{backend::hyprland::client::HyprsunsetClient, constants::*, logger::Log};
 
 /// Manages the lifecycle of a hyprsunset process started by sunsetr.
-/// 
+///
 /// This structure tracks a hyprsunset process that was started by sunsetr
 /// and provides methods for graceful termination when shutting down.
 /// It ensures proper cleanup and process reaping.
@@ -32,17 +32,17 @@ pub struct HyprsunsetProcess {
 
 impl HyprsunsetProcess {
     /// Start a new hyprsunset process with specified initial temperature and gamma values.
-    /// 
+    ///
     /// Spawns hyprsunset as a background daemon with stdout/stderr redirected
     /// to null to prevent interference with sunsetr's output. Starts hyprsunset
     /// with the provided temperature and gamma values to prevent initial jumps
     /// from hyprsunset's defaults to sunsetr's configuration.
-    /// 
+    ///
     /// # Arguments
     /// * `initial_temp` - Initial temperature in Kelvin to start hyprsunset with
     /// * `initial_gamma` - Initial gamma percentage (0.0-100.0) to start hyprsunset with
     /// * `debug_enabled` - Whether to enable debug logging for process management
-    /// 
+    ///
     /// # Returns
     /// - `Ok(HyprsunsetProcess)` if the process starts successfully
     /// - `Err` if the process fails to start
@@ -57,10 +57,20 @@ impl HyprsunsetProcess {
 
         // Validate values before starting hyprsunset
         if !(MINIMUM_TEMP..=MAXIMUM_TEMP).contains(&initial_temp) {
-            return Err(anyhow::anyhow!("Invalid temperature: {}K (must be {}-{})", initial_temp, MINIMUM_TEMP, MAXIMUM_TEMP));
+            return Err(anyhow::anyhow!(
+                "Invalid temperature: {}K (must be {}-{})",
+                initial_temp,
+                MINIMUM_TEMP,
+                MAXIMUM_TEMP
+            ));
         }
         if !(MINIMUM_GAMMA..=MAXIMUM_GAMMA).contains(&initial_gamma) {
-            return Err(anyhow::anyhow!("Invalid gamma: {:.1}% (must be {:.1}-{:.1})", initial_gamma, MINIMUM_GAMMA, MAXIMUM_GAMMA));
+            return Err(anyhow::anyhow!(
+                "Invalid gamma: {:.1}% (must be {:.1}-{:.1})",
+                initial_gamma,
+                MINIMUM_GAMMA,
+                MAXIMUM_GAMMA
+            ));
         }
 
         let child = Command::new("hyprsunset")
@@ -76,27 +86,27 @@ impl HyprsunsetProcess {
         let pid = child.id();
         if debug_enabled {
             Log::log_debug(&format!(
-                "hyprsunset started with PID: {} ({}K, {:.1}%)", 
+                "hyprsunset started with PID: {} ({}K, {:.1}%)",
                 pid, initial_temp, initial_gamma
             ));
         }
 
         // Give hyprsunset time to initialize its socket and IPC system
-        Log::log_decorated("Waiting for hyprsunset to initialize...");
+        Log::log_block_start("Waiting for hyprsunset to initialize...");
         thread::sleep(Duration::from_secs(2));
 
         Ok(Self { child })
     }
 
     /// Stop the hyprsunset process gracefully.
-    /// 
+    ///
     /// Attempts to terminate the process cleanly and reaps it to prevent
     /// zombie processes. Handles cases where the process may have already
     /// exited naturally.
-    /// 
+    ///
     /// # Arguments
     /// * `debug_enabled` - Whether to enable debug logging for process termination
-    /// 
+    ///
     /// # Returns
     /// - `Ok(())` if termination is successful or process already exited
     /// - `Err` if there are issues during termination
@@ -133,11 +143,11 @@ impl HyprsunsetProcess {
 }
 
 /// Check if hyprsunset is already running by testing socket connectivity.
-/// 
+///
 /// This function provides a reliable way to detect if hyprsunset is running
 /// by attempting to connect to its Unix socket. It handles the case where
 /// a socket file exists but the process is no longer running (stale socket).
-/// 
+///
 /// # Returns
 /// - `true` if hyprsunset is running and responsive
 /// - `false` if hyprsunset is not running or not responsive
@@ -152,4 +162,4 @@ pub fn is_hyprsunset_running() -> bool {
         }
     }
     false
-} 
+}

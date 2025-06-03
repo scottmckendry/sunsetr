@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{NaiveTime, Timelike}; // Added Timelike import
+use chrono::{NaiveTime, Timelike};
 #[cfg(not(feature = "testing-support"))]
 use crossterm::{
     cursor,
@@ -54,8 +54,10 @@ pub struct Config {
 
 impl Config {
     pub fn get_config_path() -> Result<PathBuf> {
-        if cfg!(test) { // For library's own unit tests, bypass complex logic
-            let config_dir = dirs::config_dir().context("Could not determine config directory for unit tests")?;
+        if cfg!(test) {
+            // For library's own unit tests, bypass complex logic
+            let config_dir = dirs::config_dir()
+                .context("Could not determine config directory for unit tests")?;
             Ok(config_dir.join("sunsetr").join("sunsetr.toml"))
         } else {
             // For binary execution or integration tests (when not a unit test)
@@ -72,7 +74,8 @@ impl Config {
                     {
                         anyhow::bail!(
                             "TEST_MODE_CONFLICT: Found configuration files in both new ({}) and old ({}) locations while testing-support feature is active.",
-                            new_config_path.display(), old_config_path.display()
+                            new_config_path.display(),
+                            old_config_path.display()
                         )
                     }
                     #[cfg(not(feature = "testing-support"))]
@@ -91,8 +94,7 @@ impl Config {
     #[cfg(not(feature = "testing-support"))]
     fn choose_config_file(new_path: PathBuf, old_path: PathBuf) -> Result<PathBuf> {
         Log::log_warning("Configuration conflict detected");
-        Log::log_pipe();
-        Log::log_decorated("Please select which config to keep:");
+        Log::log_block_start("Please select which config to keep:");
 
         let options = vec![
             (
@@ -113,8 +115,7 @@ impl Config {
         };
 
         // Confirm deletion
-        Log::log_pipe();
-        Log::log_decorated(&format!("You chose: {}", chosen_path.display()));
+        Log::log_block_start(&format!("You chose: {}", chosen_path.display()));
         Log::log_decorated(&format!("Will remove: {}", to_remove.display()));
 
         let confirm_options = vec![
@@ -135,8 +136,7 @@ impl Config {
 
         // Try to use trash-cli first, fallback to direct removal
         let removed_successfully = if Self::try_trash_file(&to_remove) {
-            Log::log_pipe();
-            Log::log_decorated(&format!(
+            Log::log_block_start(&format!(
                 "Successfully moved to trash: {}",
                 to_remove.display()
             ));
@@ -147,14 +147,12 @@ impl Config {
             Log::log_decorated("Please remove it manually to avoid future conflicts.");
             false
         } else {
-            Log::log_pipe();
-            Log::log_decorated(&format!("Successfully removed: {}", to_remove.display()));
+            Log::log_block_start(&format!("Successfully removed: {}", to_remove.display()));
             true
         };
 
         if removed_successfully {
-            Log::log_pipe();
-            Log::log_decorated(&format!("Using configuration: {}", chosen_path.display()));
+            Log::log_block_start(&format!("Using configuration: {}", chosen_path.display()));
         }
 
         Ok(chosen_path)
@@ -549,7 +547,10 @@ impl Config {
     // This version does NOT create a default config if the path doesn't exist.
     pub fn load_from_path(path: &PathBuf) -> Result<Self> {
         if !path.exists() {
-            anyhow::bail!("Configuration file not found at specified path: {}", path.display());
+            anyhow::bail!(
+                "Configuration file not found at specified path: {}",
+                path.display()
+            );
         }
 
         let content = fs::read_to_string(path)
@@ -559,7 +560,7 @@ impl Config {
             .with_context(|| format!("Failed to parse config from {}", path.display()))?;
 
         Self::apply_defaults_and_validate_fields(&mut config)?;
-        
+
         // Comprehensive configuration validation (this is the existing public function)
         validate_config(&config)?;
 
@@ -577,8 +578,12 @@ impl Config {
 
         // Now that we're sure a file exists (either pre-existing or newly created default),
         // load it using the common path-based loader.
-        Self::load_from_path(&config_path)
-            .with_context(|| format!("Failed to load configuration from {}", config_path.display()))
+        Self::load_from_path(&config_path).with_context(|| {
+            format!(
+                "Failed to load configuration from {}",
+                config_path.display()
+            )
+        })
     }
 
     pub fn log_config(&self) {

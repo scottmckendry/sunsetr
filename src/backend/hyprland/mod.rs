@@ -48,12 +48,12 @@ impl HyprlandBackend {
         // Start hyprsunset if needed
         let process = if config.start_hyprsunset.unwrap_or(DEFAULT_START_HYPRSUNSET) {
             if is_hyprsunset_running() {
+                Log::log_pipe();
                 Log::log_warning(
                     "hyprsunset is already running but start_hyprsunset is enabled in config.",
                 );
-                Log::log_pipe();
-                Log::log_decorated(
-                    "This indicates a configuration conflict. Please choose one of:\n\
+                anyhow::bail!(
+                    "This indicates a configuration conflict. Please choose one:\n\
                     • Kill the existing hyprsunset process: pkill hyprsunset\n\
                     • Change start_hyprsunset = false in sunsetr.toml\n\
                     \n\
@@ -152,7 +152,7 @@ impl ColorTemperatureBackend for HyprlandBackend {
                 match state {
                     TransitionState::Stable(time_state) => match time_state {
                         TimeState::Day => Log::log_block_start("Entering day mode 󰖨 "),
-                        TimeState::Night => Log::log_block_start("Entering night mode  "),
+                        TimeState::Night => Log::log_block_start("Entering night mode  "),
                     },
                     TransitionState::Transitioning { from, to, .. } => {
                         let transition_type = match (from, to) {
@@ -304,4 +304,3 @@ pub fn verify_hyprsunset_connection(client: &mut HyprsunsetClient) -> Result<()>
           3. Enable the service: systemctl --user enable hyprsunset.service"
     );
 }
-

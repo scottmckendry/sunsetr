@@ -4,18 +4,18 @@
 //! and other helper operations used throughout the application.
 
 /// Interpolate between two u32 values based on progress (0.0 to 1.0).
-/// 
+///
 /// This function provides smooth transitions between integer values, commonly
 /// used for color temperature transitions during sunrise/sunset.
-/// 
+///
 /// # Arguments
 /// * `start` - Starting value (returned when progress = 0.0)
 /// * `end` - Ending value (returned when progress = 1.0)
 /// * `progress` - Interpolation progress, automatically clamped to [0.0, 1.0]
-/// 
+///
 /// # Returns
 /// Interpolated value rounded to the nearest integer
-/// 
+///
 /// # Examples
 /// ```
 /// use sunsetr::utils::interpolate_u32;
@@ -30,18 +30,18 @@ pub fn interpolate_u32(start: u32, end: u32, progress: f32) -> u32 {
 }
 
 /// Interpolate between two f32 values based on progress (0.0 to 1.0).
-/// 
+///
 /// This function provides smooth transitions between floating-point values,
 /// commonly used for gamma/brightness transitions during sunrise/sunset.
-/// 
+///
 /// # Arguments
 /// * `start` - Starting value (returned when progress = 0.0)
 /// * `end` - Ending value (returned when progress = 1.0)
 /// * `progress` - Interpolation progress, automatically clamped to [0.0, 1.0]
-/// 
+///
 /// # Returns
 /// Interpolated floating-point value
-/// 
+///
 /// # Examples
 /// ```
 /// use sunsetr::utils::interpolate_f32;
@@ -53,19 +53,19 @@ pub fn interpolate_f32(start: f32, end: f32, progress: f32) -> f32 {
 }
 
 /// Simple semantic version comparison for version strings.
-/// 
+///
 /// Compares version strings in the format "vX.Y.Z" or "X.Y.Z" using
 /// semantic versioning rules. Handles the optional 'v' prefix automatically.
-/// 
+///
 /// # Arguments
 /// * `version1` - First version string to compare
 /// * `version2` - Second version string to compare
-/// 
+///
 /// # Returns
 /// - `Ordering::Less` if version1 < version2
 /// - `Ordering::Equal` if version1 == version2  
 /// - `Ordering::Greater` if version1 > version2
-/// 
+///
 /// # Examples
 /// ```
 /// use std::cmp::Ordering;
@@ -80,25 +80,25 @@ pub fn compare_versions(version1: &str, version2: &str) -> std::cmp::Ordering {
             .filter_map(|s| s.parse().ok())
             .collect()
     };
-    
+
     let v1 = parse_version(version1);
     let v2 = parse_version(version2);
-    
+
     v1.cmp(&v2)
 }
 
 /// Extract semantic version string from hyprsunset command output.
-/// 
+///
 /// Parses hyprsunset output to find version information in various formats.
 /// Handles both "vX.Y.Z" and "X.Y.Z" patterns and normalizes to "vX.Y.Z" format.
-/// 
+///
 /// # Arguments
 /// * `output` - Raw output text from hyprsunset command
-/// 
+///
 /// # Returns
 /// - `Some(String)` containing normalized version (e.g., "v2.0.0")
 /// - `None` if no valid semantic version found
-/// 
+///
 /// # Examples
 /// ```
 /// use sunsetr::utils::extract_version_from_output;
@@ -117,12 +117,12 @@ pub fn extract_version_from_output(output: &str) -> Option<String> {
 }
 
 /// Extract semantic version from a single line of text using regex.
-/// 
+///
 /// Internal helper function that uses regex to find and normalize semantic versions.
-/// 
+///
 /// # Arguments
 /// * `line` - Single line of text to search
-/// 
+///
 /// # Returns
 /// - `Some(String)` with normalized version if found
 /// - `None` if no semantic version pattern found
@@ -159,10 +159,10 @@ mod tests {
         assert_eq!(interpolate_u32(1000, 20000, 0.0), 1000);
         assert_eq!(interpolate_u32(1000, 20000, 1.0), 20000);
         assert_eq!(interpolate_u32(1000, 20000, 0.5), 10500);
-        
+
         // Test with same values
         assert_eq!(interpolate_u32(5000, 5000, 0.5), 5000);
-        
+
         // Test with reversed order
         assert_eq!(interpolate_u32(6000, 3000, 0.0), 6000);
         assert_eq!(interpolate_u32(6000, 3000, 1.0), 3000);
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(interpolate_f32(90.0, 100.0, 0.0), 90.0);
         assert_eq!(interpolate_f32(90.0, 100.0, 1.0), 100.0);
         assert_eq!(interpolate_f32(90.0, 100.0, 0.5), 95.0);
-        
+
         // Test precision
         let result = interpolate_f32(90.0, 100.0, 0.3);
         assert!((result - 93.0).abs() < 0.001);
@@ -233,23 +233,32 @@ mod tests {
     #[test]
     fn test_extract_version_from_output_hyprsunset_format() {
         let output = "hyprsunset v2.0.0";
-        assert_eq!(extract_version_from_output(output), Some("v2.0.0".to_string()));
-        
+        assert_eq!(
+            extract_version_from_output(output),
+            Some("v2.0.0".to_string())
+        );
+
         let output = "hyprsunset 2.0.0";
-        assert_eq!(extract_version_from_output(output), Some("v2.0.0".to_string()));
+        assert_eq!(
+            extract_version_from_output(output),
+            Some("v2.0.0".to_string())
+        );
     }
 
     #[test]
     fn test_extract_version_from_output_multiline() {
         let output = "hyprsunset - some description\nversion: v1.5.2\nother info";
-        assert_eq!(extract_version_from_output(output), Some("v1.5.2".to_string()));
+        assert_eq!(
+            extract_version_from_output(output),
+            Some("v1.5.2".to_string())
+        );
     }
 
     #[test]
     fn test_extract_version_from_output_no_version() {
         let output = "hyprsunset - no version info here";
         assert_eq!(extract_version_from_output(output), None);
-        
+
         let output = "";
         assert_eq!(extract_version_from_output(output), None);
     }
@@ -258,9 +267,12 @@ mod tests {
     fn test_extract_version_from_output_malformed() {
         let output = "version 1.0"; // Missing patch version
         assert_eq!(extract_version_from_output(output), None);
-        
+
         let output = "v1.0.0.0"; // Too many components
-        assert_eq!(extract_version_from_output(output), Some("v1.0.0".to_string()));
+        assert_eq!(
+            extract_version_from_output(output),
+            Some("v1.0.0".to_string())
+        );
     }
 
     // Property-based tests using proptest
@@ -293,4 +305,5 @@ mod tests {
             }
         }
     }
-} 
+}
+

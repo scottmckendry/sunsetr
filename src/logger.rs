@@ -23,6 +23,55 @@ pub enum LogLevel {
 }
 
 /// Main logging interface providing structured output formatting.
+///
+/// ## Logging Conventions
+///
+/// To maintain a consistent and readable log output, adhere to the following conventions
+/// when using the visual formatting functions:
+///
+/// - **`log_block_start(message: &str)`**:
+///   - **Purpose**: Always use this to initiate a new, distinct conceptual block of log information,
+///     especially for major state changes, phase indications, or significant events (e.g., "Commencing sunrise",
+///     "Loading configuration", "Backend detected").
+///   - **Output**: Prepends an empty pipe `┃` for spacing from any previous log, then prints `┣ message`.
+///   - **Usage**: Subsequent related messages within this conceptual block should typically use
+///     `log_decorated()` or `log_indented()`.
+///
+/// - **`log_decorated(message: &str)`**:
+///   - **Purpose**: For logging messages that are part of an existing block started by `log_block_start()`,
+///     or for simple, single-line status messages that don't warrant a full block but still fit the pipe structure.
+///   - **Output**: Prints `┣ message`.
+///   - **Context**: If this message is a continuation of a `log_block_start`, it will appear visually connected.
+///
+/// - **`log_indented(message: &str)`**:
+///   - **Purpose**: For nested data or detailed sub-items that belong to a parent message
+///     (often logged with `log_block_start()` or `log_decorated()`). Useful for listing configuration items,
+///     multi-part details, etc.
+///   - **Output**: Prints `┃   message` (pipe, three spaces, then message).
+///
+/// - **`log_pipe()`**:
+///   - **Purpose**: Used explicitly to insert a single, empty, prefixed line (`┃`) for vertical spacing.
+///   - **Usage**: Its primary use-case is to create visual separation to initial a block *before* using
+///     `log_warning()`, `log_error()`, `log_critical()`, `log_info()`, `log_debug()`, or logging
+///     an `anyhow` error message.
+///     Avoid using it if it might lead to double pipes or unnecessary empty lines before a `log_block_start()`
+///     (which already provides top spacing) or `log_end()`. *Not for use at the end of a block.
+///
+/// - **`log_version()`**:
+///   - **Purpose**: Prints the application startup header. Typically called once at the beginning.
+///   - **Output**: `┏ sunsetr vX.Y.Z ━━╸` followed by `┃`.
+///
+/// - **`log_end()`**:
+///   - **Purpose**: Prints the final log termination marker. Called once at shutdown.
+///   - **Output**: `╹`.
+///
+/// - **`log_info()`, `log_warning()`, `log_error()`, `log_debug()`, `log_critical()`**:
+///   - **Purpose**: These are standard semantic logging methods. They use a `[LEVEL]` prefix
+///     (e.g., `[INFO] message`) and do not use the box-drawing characters.
+///   - **Usage**: Use them for their semantic meaning when a message doesn't fit the structured
+///     box-drawing style or when a specific log level prefix is more appropriate.
+///     If they begin a new conceptual block of information that is *not* part of the primary
+///     box-drawing flow, they ought to begin with a `log_pipe()`.
 pub struct Log;
 
 impl Log {
@@ -67,36 +116,42 @@ impl Log {
 
     // ═══ Convenience Methods for Common Log Levels ═══
 
-    /// Log an error message.
+    /// Log an error message (e.g., `[ERR] message`).
     pub fn log_error(message: &str) {
         Self::log(LogLevel::Err, message);
     }
 
-    /// Log a warning message.
+    /// Log a warning message (e.g., `[WARN] message`).
     pub fn log_warning(message: &str) {
         Self::log(LogLevel::Warn, message);
     }
 
-    /// Log an informational message.
+    /// Log an informational message (e.g., `[INFO] message`).
+    /// This is for printing important information regardless if debug mode is enabled or not
     pub fn log_info(message: &str) {
         Self::log(LogLevel::Info, message);
     }
 
-    /// Log a debug/operational message.
+    /// Log a default debug/operational message (e.g., `[LOG] message`).
     pub fn log_debug(message: &str) {
         Self::log(LogLevel::Log, message);
     }
 
-    /// Log a critical error message.
+    /// Log a critical error message (e.g., `[CRIT] message`).
     pub fn log_critical(message: &str) {
         Self::log(LogLevel::Crit, message);
     }
 
     // ═══ Visual Formatting Functions ═══
 
-    /// Log a decorated message with visual branching indicator.
+    /// Log a decorated message, typically as part of an existing block or for standalone emphasis.
     ///
-    /// Used for main status messages and important information.
+    /// **Purpose**: For logging messages that are part of an existing block started by `log_block_start()`.
+    ///
+    /// **Output**: Prints `┣ message`.
+    ///
+    /// **Context**: This should be a continuation of a `log_block_start()`, it will appear visually connected.
+    /// Consider if a `log_block_start()` is more appropriate if this message initiates a new conceptual block.
     pub fn log_decorated(message: &str) {
         if !Self::is_enabled() {
             return;
@@ -104,9 +159,13 @@ impl Log {
         println!("┣ {}", message);
     }
 
-    /// Log an indented message for sub-items or details.
+    /// Log an indented message for sub-items or details within a block.
     ///
-    /// Used for secondary information under main status messages.
+    /// **Purpose**: For nested data or detailed sub-items that belong to a parent message
+    /// (always logged with `log_block_start()`, `log_decorated()`, or a LogLevel type log message). Useful for listing configuration items,
+    /// multi-part details, etc.
+    ///
+    /// **Output**: Prints `┃   message` (pipe, three spaces, then message).
     pub fn log_indented(message: &str) {
         if !Self::is_enabled() {
             return;
@@ -114,9 +173,16 @@ impl Log {
         println!("┃   {}", message);
     }
 
-    /// Log a visual pipe separator.
+    /// Log a visual pipe separator for vertical spacing at the *start* of a LogLevel type conceptual block.
+    /// **Never use this at the end of a block.**
     ///
-    /// Used to create visual spacing in structured output.
+    /// **Purpose**: Used explicitly to insert a single, empty, prefixed line (`┃`) for vertical spacing.
+    ///
+    /// **Usage**: Its primary use-case is to create visual separation *before* a LogLevel type block containing
+    /// `log_warning()`, `log_error()`, `log_critical()`, `log_info()`, or `log_debug()` messages.
+    /// Avoid using it if it might lead to double pipes or unnecessary empty lines before another `log_block_start()`
+    /// (which already provides top spacing). Using this only at the start of a block ensures we don't create
+    /// an additional pipe before a`log_end()`.
     pub fn log_pipe() {
         if !Self::is_enabled() {
             return;
@@ -124,9 +190,16 @@ impl Log {
         println!("┃");
     }
 
-    /// Log a block start message with visual separation.
+    /// Log a block start message, initiating a new conceptual block of information.
     ///
-    /// Used for major state changes or new operational phases.
+    /// **Purpose**: Always use this to initiate a new, distinct conceptual block of non-LogLevel type log information,
+    /// especially for major state changes, phase indications, or significant events (e.g., "Commencing sunrise",
+    /// "Loading configuration", "Backend detected").
+    ///
+    /// **Output**: Prepends an empty pipe `┃` for spacing from any previous log, then prints `┣ message`.
+    ///
+    /// **Usage**: Subsequent related messages within this conceptual block should typically use
+    /// `log_decorated()` or `log_indented()`.
     pub fn log_block_start(message: &str) {
         if !Self::is_enabled() {
             return;
@@ -135,20 +208,19 @@ impl Log {
         println!("┣ {}", message);
     }
 
-    /// Log the application version header.
+    /// Log the application version header. Typically called once at application start.
     ///
-    /// Creates the initial visual header when the application starts.
+    /// **Output**: `┏ sunsetr vX.Y.Z ━━╸` followed by `┃`.
     pub fn log_version() {
         if !Self::is_enabled() {
             return;
         }
         println!("┏ sunsetr v{} ━━╸", env!("CARGO_PKG_VERSION"));
-        println!("┃");
     }
 
-    /// Log the final termination marker.
+    /// Log the final termination marker. Always called once at application shutdown.
     ///
-    /// Closes the visual structure when the application ends.
+    /// **Output**: `╹`.
     pub fn log_end() {
         if !Self::is_enabled() {
             return;

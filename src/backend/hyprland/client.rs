@@ -368,7 +368,8 @@ impl HyprsunsetClient {
         // Don't try to apply state if we're shutting down
         if !running.load(Ordering::SeqCst) {
             if self.debug_enabled {
-                Log::log_decorated("Skipping state application during shutdown");
+                Log::log_pipe();
+                Log::log_info("Skipping state application during shutdown");
             }
             return Ok(());
         }
@@ -378,6 +379,7 @@ impl HyprsunsetClient {
                 // Execute temperature command with configured day temperature
                 let day_temp = config.day_temp.unwrap_or(DEFAULT_DAY_TEMP);
                 if self.debug_enabled {
+                    Log::log_pipe();
                     Log::log_debug(&format!("Setting temperature to {}K...", day_temp));
                 }
                 let temp_success = self.run_temperature_command(day_temp);
@@ -421,6 +423,7 @@ impl HyprsunsetClient {
                 // Execute temperature command
                 let night_temp = config.night_temp.unwrap_or(DEFAULT_NIGHT_TEMP);
                 if self.debug_enabled {
+                    Log::log_pipe();
                     Log::log_debug(&format!("Setting temperature to {}K...", night_temp));
                 }
                 let temp_success = self.run_temperature_command(night_temp);
@@ -516,6 +519,7 @@ impl HyprsunsetClient {
 
                 // Apply temperature command with progress-based value
                 if self.debug_enabled {
+                    Log::log_pipe();
                     Log::log_debug(&format!("Setting temperature to {}K...", current_temp));
                 }
                 let temp_success = self.run_temperature_command(current_temp);
@@ -743,6 +747,7 @@ impl HyprsunsetClient {
 
                 // Temperature command with logging
                 if self.debug_enabled {
+                    Log::log_pipe();
                     Log::log_debug(&format!("Setting temperature to {}K...", current_temp));
                 }
                 let temp_success = self.run_temperature_command(current_temp);
@@ -766,12 +771,14 @@ impl HyprsunsetClient {
                     (true, true) => Ok(()),
                     (true, false) => {
                         if self.debug_enabled {
+                            Log::log_pipe();
                             Log::log_warning("Partial success: temperature applied, gamma failed");
                         }
                         Ok(()) // Consider partial success acceptable
                     }
                     (false, true) => {
                         if self.debug_enabled {
+                            Log::log_pipe();
                             Log::log_warning("Partial success: gamma applied, temperature failed");
                         }
                         Ok(()) // Consider partial success acceptable
@@ -780,6 +787,7 @@ impl HyprsunsetClient {
                         // Log the error and then return it
                         let error_msg = "Both temperature and gamma commands failed";
                         if self.debug_enabled {
+                            Log::log_pipe();
                             Log::log_error(error_msg);
                         }
                         Err(anyhow::anyhow!(error_msg))
