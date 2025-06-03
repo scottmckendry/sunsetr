@@ -3,6 +3,13 @@
 //! This module handles starting, stopping, and monitoring the hyprsunset daemon
 //! when sunsetr is configured to manage it directly. It provides process lifecycle
 //! management and status checking functionality.
+//!
+//! # Initial Value Handling
+//!
+//! When starting hyprsunset, initial temperature and gamma values are passed as
+//! command line arguments (-t for temperature, -g for gamma). This ensures that
+//! hyprsunset starts with the correct values immediately, preventing jarring
+//! transitions from hyprsunset's internal defaults to sunsetr's configuration.
 
 use anyhow::{Context, Result};
 use std::{
@@ -34,16 +41,19 @@ impl HyprsunsetProcess {
     /// # Arguments
     /// * `initial_temp` - Initial temperature in Kelvin to start hyprsunset with
     /// * `initial_gamma` - Initial gamma percentage (0.0-100.0) to start hyprsunset with
+    /// * `debug_enabled` - Whether to enable debug logging for process management
     /// 
     /// # Returns
     /// - `Ok(HyprsunsetProcess)` if the process starts successfully
     /// - `Err` if the process fails to start
-    pub fn new(initial_temp: u32, initial_gamma: f32) -> Result<Self> {
-        Log::log_pipe();
-        Log::log_debug(&format!(
-            "Starting hyprsunset process with initial values: {}K, {:.1}%",
-            initial_temp, initial_gamma
-        ));
+    pub fn new(initial_temp: u32, initial_gamma: f32, debug_enabled: bool) -> Result<Self> {
+        if debug_enabled {
+            Log::log_pipe();
+            Log::log_debug(&format!(
+                "Starting hyprsunset process with initial values: {}K, {:.1}%",
+                initial_temp, initial_gamma
+            ));
+        }
 
         // Validate values before starting hyprsunset
         if !(MINIMUM_TEMP..=MAXIMUM_TEMP).contains(&initial_temp) {
@@ -64,10 +74,12 @@ impl HyprsunsetProcess {
             .context("Failed to start hyprsunset")?;
 
         let pid = child.id();
-        Log::log_debug(&format!(
-            "hyprsunset started with PID: {} ({}K, {:.1}%)", 
-            pid, initial_temp, initial_gamma
-        ));
+        if debug_enabled {
+            Log::log_debug(&format!(
+                "hyprsunset started with PID: {} ({}K, {:.1}%)", 
+                pid, initial_temp, initial_gamma
+            ));
+        }
 
         // Give hyprsunset time to initialize its socket and IPC system
         Log::log_decorated("Waiting for hyprsunset to initialize...");
@@ -82,16 +94,21 @@ impl HyprsunsetProcess {
     /// zombie processes. Handles cases where the process may have already
     /// exited naturally.
     /// 
+    /// # Arguments
+    /// * `debug_enabled` - Whether to enable debug logging for process termination
+    /// 
     /// # Returns
     /// - `Ok(())` if termination is successful or process already exited
     /// - `Err` if there are issues during termination
-    pub fn stop(mut self) -> Result<()> {
+    pub fn stop(mut self, debug_enabled: bool) -> Result<()> {
         let pid = self.child.id();
 
         // Check if process has already exited
         match self.child.try_wait() {
             Ok(Some(status)) => {
-                Log::log_debug(&format!("Hyprsunset process terminated with {}", status));
+                if debug_enabled {
+                    Log::log_debug(&format!("Hyprsunset process terminated with {}", status));
+                }
             }
             Ok(None) => {
                 // Process still running, terminate it gracefully
@@ -126,7 +143,7 @@ impl HyprsunsetProcess {
 /// - `false` if hyprsunset is not running or not responsive
 pub fn is_hyprsunset_running() -> bool {
     // Initialize a client to determine the socket path
-    if let Ok(client) = HyprsunsetClient::new() {
+    if let Ok(client) = HyprsunsetClient::new(false) {
         // Check both that the socket file exists AND that we can connect to it
         if client.socket_path.exists() {
             // Try to connect - if successful, hyprsunset is running

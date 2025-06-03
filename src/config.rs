@@ -1,14 +1,16 @@
 use anyhow::{Context, Result};
 use chrono::{NaiveTime, Timelike}; // Added Timelike import
+#[cfg(not(feature = "testing-support"))]
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
-    style::{Color, Print, ResetColor, SetForegroundColor},
+    style::Print,
     terminal::{self, ClearType},
 };
 use serde::Deserialize;
 use std::fs::{self};
+#[cfg(not(feature = "testing-support"))]
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -52,23 +54,41 @@ pub struct Config {
 
 impl Config {
     pub fn get_config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir().context("Could not determine config directory")?;
+        if cfg!(test) { // For library's own unit tests, bypass complex logic
+            let config_dir = dirs::config_dir().context("Could not determine config directory for unit tests")?;
+            Ok(config_dir.join("sunsetr").join("sunsetr.toml"))
+        } else {
+            // For binary execution or integration tests (when not a unit test)
+            let config_dir = dirs::config_dir().context("Could not determine config directory")?;
+            let new_config_path = config_dir.join("sunsetr").join("sunsetr.toml");
+            let old_config_path = config_dir.join("hypr").join("sunsetr.toml");
 
-        let new_config_path = config_dir.join("sunsetr").join("sunsetr.toml");
-        let old_config_path = config_dir.join("hypr").join("sunsetr.toml");
+            let new_exists = new_config_path.exists();
+            let old_exists = old_config_path.exists();
 
-        let new_exists = new_config_path.exists();
-        let old_exists = old_config_path.exists();
-
-        match (new_exists, old_exists) {
-            (true, true) => Self::choose_config_file(new_config_path, old_config_path),
-            (true, false) => Ok(new_config_path),
-            (false, true) => Ok(old_config_path),
-            (false, false) => Ok(new_config_path), // Generate new config in new location
+            match (new_exists, old_exists) {
+                (true, true) => {
+                    #[cfg(feature = "testing-support")]
+                    {
+                        anyhow::bail!(
+                            "TEST_MODE_CONFLICT: Found configuration files in both new ({}) and old ({}) locations while testing-support feature is active.",
+                            new_config_path.display(), old_config_path.display()
+                        )
+                    }
+                    #[cfg(not(feature = "testing-support"))]
+                    {
+                        Self::choose_config_file(new_config_path, old_config_path)
+                    }
+                }
+                (true, false) => Ok(new_config_path),
+                (false, true) => Ok(old_config_path),
+                (false, false) => Ok(new_config_path), // Default to new path for creation
+            }
         }
     }
 
     /// Interactive terminal interface for choosing which config file to keep
+    #[cfg(not(feature = "testing-support"))]
     fn choose_config_file(new_path: PathBuf, old_path: PathBuf) -> Result<PathBuf> {
         Log::log_warning("Configuration conflict detected");
         Log::log_pipe();
@@ -141,6 +161,7 @@ impl Config {
     }
 
     /// Display an interactive dropdown menu and return the selected index
+    #[cfg(not(feature = "testing-support"))]
     fn show_dropdown_menu<T>(options: &[(String, T)]) -> Result<usize> {
         Log::log_pipe();
         if options.is_empty() {
@@ -272,6 +293,7 @@ impl Config {
     }
 
     /// Attempt to move file to trash using trash-cli
+    #[cfg(not(feature = "testing-support"))]
     fn try_trash_file(path: &PathBuf) -> bool {
         // Try trash-put command (most common)
         if let Ok(status) = std::process::Command::new("trash-put").arg(path).status() {
@@ -386,23 +408,14 @@ impl Config {
         Ok(())
     }
 
-    pub fn load() -> Result<Self> {
-        let config_path = Self::get_config_path()?;
-
-        if !config_path.exists() {
-            Self::create_default_config(&config_path)?;
-        }
-
-        let content = fs::read_to_string(&config_path).context("Failed to read sunsetr.toml")?;
-
-        let mut config: Config = toml::from_str(&content).context("Failed to parse config file")?;
-
+    // NEW private helper method
+    fn apply_defaults_and_validate_fields(config: &mut Config) -> Result<()> {
         // Set default for start_hyprsunset if not specified
         if config.start_hyprsunset.is_none() {
             config.start_hyprsunset = Some(DEFAULT_START_HYPRSUNSET);
         }
 
-        // Set default for backend if not specified (auto-detection will be added later)
+        // Set default for backend if not specified
         if config.backend.is_none() {
             config.backend = Some(DEFAULT_BACKEND);
         }
@@ -529,22 +542,54 @@ impl Config {
                 );
             }
         }
+        Ok(())
+    }
 
-        // Comprehensive configuration validation
+    // NEW public method for loading from a specific path
+    // This version does NOT create a default config if the path doesn't exist.
+    pub fn load_from_path(path: &PathBuf) -> Result<Self> {
+        if !path.exists() {
+            anyhow::bail!("Configuration file not found at specified path: {}", path.display());
+        }
+
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config from {}", path.display()))?;
+
+        let mut config: Config = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+        Self::apply_defaults_and_validate_fields(&mut config)?;
+        
+        // Comprehensive configuration validation (this is the existing public function)
         validate_config(&config)?;
 
         Ok(config)
     }
 
+    // MODIFIED existing load method
+    pub fn load() -> Result<Self> {
+        let config_path = Self::get_config_path()?;
+
+        if !config_path.exists() {
+            Self::create_default_config(&config_path)
+                .context("Failed to create default config during load")?;
+        }
+
+        // Now that we're sure a file exists (either pre-existing or newly created default),
+        // load it using the common path-based loader.
+        Self::load_from_path(&config_path)
+            .with_context(|| format!("Failed to load configuration from {}", config_path.display()))
+    }
+
     pub fn log_config(&self) {
         Log::log_block_start("Loaded configuration");
         Log::log_indented(&format!(
-            "Auto-start hyprsunset: {}",
-            self.start_hyprsunset.unwrap_or(DEFAULT_START_HYPRSUNSET)
-        ));
-        Log::log_indented(&format!(
             "Backend: {}",
             self.backend.as_ref().unwrap_or(&DEFAULT_BACKEND).as_str()
+        ));
+        Log::log_indented(&format!(
+            "Auto-start hyprsunset: {}",
+            self.start_hyprsunset.unwrap_or(DEFAULT_START_HYPRSUNSET)
         ));
         Log::log_indented(&format!(
             "Enable startup transition: {}",
@@ -598,18 +643,10 @@ impl Config {
                 .unwrap_or(DEFAULT_TRANSITION_MODE)
         ));
     }
-
-    /// Validate the configuration for logical consistency and compatibility.
-    ///
-    /// This is a public wrapper around the internal validation logic,
-    /// primarily useful for testing and external validation.
-    pub fn validate(&self) -> Result<()> {
-        validate_config(self)
-    }
 }
 
 /// Comprehensive configuration validation to prevent impossible or problematic setups
-fn validate_config(config: &Config) -> Result<()> {
+pub fn validate_config(config: &Config) -> Result<()> {
     use chrono::NaiveTime;
 
     // 0. Validate backend configuration compatibility

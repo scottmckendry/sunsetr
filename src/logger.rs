@@ -27,7 +27,7 @@ pub struct Log;
 
 impl Log {
     /// Enable or disable logging temporarily.
-    /// 
+    ///
     /// This is useful for quiet operation during automated processes
     /// or testing where log output would interfere with results.
     pub fn set_enabled(enabled: bool) {
@@ -40,10 +40,10 @@ impl Log {
     }
 
     /// Main log function with level-based prefixes.
-    /// 
+    ///
     /// Outputs messages with appropriate prefixes to indicate severity.
     /// Matches the style used by hyprsunset's debug logging.
-    /// 
+    ///
     /// # Arguments
     /// * `level` - LogLevel indicating message importance
     /// * `message` - Text content to log
@@ -66,7 +66,7 @@ impl Log {
     }
 
     // ═══ Convenience Methods for Common Log Levels ═══
-    
+
     /// Log an error message.
     pub fn log_error(message: &str) {
         Self::log(LogLevel::Err, message);
@@ -93,9 +93,9 @@ impl Log {
     }
 
     // ═══ Visual Formatting Functions ═══
-    
+
     /// Log a decorated message with visual branching indicator.
-    /// 
+    ///
     /// Used for main status messages and important information.
     pub fn log_decorated(message: &str) {
         if !Self::is_enabled() {
@@ -105,7 +105,7 @@ impl Log {
     }
 
     /// Log an indented message for sub-items or details.
-    /// 
+    ///
     /// Used for secondary information under main status messages.
     pub fn log_indented(message: &str) {
         if !Self::is_enabled() {
@@ -115,7 +115,7 @@ impl Log {
     }
 
     /// Log a visual pipe separator.
-    /// 
+    ///
     /// Used to create visual spacing in structured output.
     pub fn log_pipe() {
         if !Self::is_enabled() {
@@ -125,7 +125,7 @@ impl Log {
     }
 
     /// Log a block start message with visual separation.
-    /// 
+    ///
     /// Used for major state changes or new operational phases.
     pub fn log_block_start(message: &str) {
         if !Self::is_enabled() {
@@ -136,7 +136,7 @@ impl Log {
     }
 
     /// Log the application version header.
-    /// 
+    ///
     /// Creates the initial visual header when the application starts.
     pub fn log_version() {
         if !Self::is_enabled() {
@@ -147,7 +147,7 @@ impl Log {
     }
 
     /// Log the final termination marker.
-    /// 
+    ///
     /// Closes the visual structure when the application ends.
     pub fn log_end() {
         if !Self::is_enabled() {

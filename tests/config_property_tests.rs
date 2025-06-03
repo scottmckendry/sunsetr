@@ -1,7 +1,7 @@
-use proptest::prelude::*;
-use sunsetr::config::{Config, Backend};
-use sunsetr::constants::*;
 use chrono::{NaiveTime, Timelike};
+use proptest::prelude::*;
+use sunsetr::config::{Backend, Config, validate_config};
+use sunsetr::constants::*;
 
 /// Generate all possible combinations of boolean configuration options
 #[derive(Debug, Clone)]
@@ -22,6 +22,22 @@ struct TransitionModeCase {
     mode: String,
 }
 
+#[derive(Debug)]
+struct TestConfigCreationArgs {
+    bool_combo: BooleanCombinations,
+    backend_combo: BackendCombinations,
+    mode_combo: TransitionModeCase,
+    sunset: String,
+    sunrise: String,
+    transition_duration: Option<u64>,
+    update_interval: Option<u64>,
+    night_temp: Option<u32>,
+    day_temp: Option<u32>,
+    night_gamma: Option<f32>,
+    day_gamma: Option<f32>,
+    startup_transition_duration: Option<u64>,
+}
+
 impl Arbitrary for BooleanCombinations {
     type Parameters = ();
     type Strategy = BoxedStrategy<Self>;
@@ -29,16 +45,44 @@ impl Arbitrary for BooleanCombinations {
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
         // Generate all 9 combinations: 3 states × 3 states
         prop_oneof![
-            Just(BooleanCombinations { start_hyprsunset: None, startup_transition: None }),
-            Just(BooleanCombinations { start_hyprsunset: None, startup_transition: Some(true) }),
-            Just(BooleanCombinations { start_hyprsunset: None, startup_transition: Some(false) }),
-            Just(BooleanCombinations { start_hyprsunset: Some(true), startup_transition: None }),
-            Just(BooleanCombinations { start_hyprsunset: Some(true), startup_transition: Some(true) }),
-            Just(BooleanCombinations { start_hyprsunset: Some(true), startup_transition: Some(false) }),
-            Just(BooleanCombinations { start_hyprsunset: Some(false), startup_transition: None }),
-            Just(BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(true) }),
-            Just(BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) }),
-        ].boxed()
+            Just(BooleanCombinations {
+                start_hyprsunset: None,
+                startup_transition: None
+            }),
+            Just(BooleanCombinations {
+                start_hyprsunset: None,
+                startup_transition: Some(true)
+            }),
+            Just(BooleanCombinations {
+                start_hyprsunset: None,
+                startup_transition: Some(false)
+            }),
+            Just(BooleanCombinations {
+                start_hyprsunset: Some(true),
+                startup_transition: None
+            }),
+            Just(BooleanCombinations {
+                start_hyprsunset: Some(true),
+                startup_transition: Some(true)
+            }),
+            Just(BooleanCombinations {
+                start_hyprsunset: Some(true),
+                startup_transition: Some(false)
+            }),
+            Just(BooleanCombinations {
+                start_hyprsunset: Some(false),
+                startup_transition: None
+            }),
+            Just(BooleanCombinations {
+                start_hyprsunset: Some(false),
+                startup_transition: Some(true)
+            }),
+            Just(BooleanCombinations {
+                start_hyprsunset: Some(false),
+                startup_transition: Some(false)
+            }),
+        ]
+        .boxed()
     }
 }
 
@@ -50,10 +94,17 @@ impl Arbitrary for BackendCombinations {
         // Generate all 4 combinations: None, Auto, Hyprland, Wayland
         prop_oneof![
             Just(BackendCombinations { backend: None }),
-            Just(BackendCombinations { backend: Some(Backend::Auto) }),
-            Just(BackendCombinations { backend: Some(Backend::Hyprland) }),
-            Just(BackendCombinations { backend: Some(Backend::Wayland) }),
-        ].boxed()
+            Just(BackendCombinations {
+                backend: Some(Backend::Auto)
+            }),
+            Just(BackendCombinations {
+                backend: Some(Backend::Hyprland)
+            }),
+            Just(BackendCombinations {
+                backend: Some(Backend::Wayland)
+            }),
+        ]
+        .boxed()
     }
 }
 
@@ -63,42 +114,38 @@ impl Arbitrary for TransitionModeCase {
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            Just(TransitionModeCase { mode: "finish_by".to_string() }),
-            Just(TransitionModeCase { mode: "start_at".to_string() }),
-            Just(TransitionModeCase { mode: "center".to_string() }),
-        ].boxed()
+            Just(TransitionModeCase {
+                mode: "finish_by".to_string()
+            }),
+            Just(TransitionModeCase {
+                mode: "start_at".to_string()
+            }),
+            Just(TransitionModeCase {
+                mode: "center".to_string()
+            }),
+        ]
+        .boxed()
     }
 }
 
 /// Helper function to create a test config with specific values
 fn create_test_config_with_combinations(
-    bool_combo: BooleanCombinations,
-    backend_combo: BackendCombinations,
-    mode_combo: TransitionModeCase,
-    sunset: &str,
-    sunrise: &str,
-    transition_duration: Option<u64>,
-    update_interval: Option<u64>,
-    night_temp: Option<u32>,
-    day_temp: Option<u32>,
-    night_gamma: Option<f32>,
-    day_gamma: Option<f32>,
-    startup_transition_duration: Option<u64>,
+    args: TestConfigCreationArgs
 ) -> Config {
     Config {
-        start_hyprsunset: bool_combo.start_hyprsunset,
-        backend: backend_combo.backend,
-        startup_transition: bool_combo.startup_transition,
-        startup_transition_duration,
-        sunset: sunset.to_string(),
-        sunrise: sunrise.to_string(),
-        night_temp,
-        day_temp,
-        night_gamma,
-        day_gamma,
-        transition_duration,
-        update_interval,
-        transition_mode: Some(mode_combo.mode),
+        start_hyprsunset: args.bool_combo.start_hyprsunset,
+        backend: args.backend_combo.backend,
+        startup_transition: args.bool_combo.startup_transition,
+        startup_transition_duration: args.startup_transition_duration,
+        sunset: args.sunset,
+        sunrise: args.sunrise,
+        night_temp: args.night_temp,
+        day_temp: args.day_temp,
+        night_gamma: args.night_gamma,
+        day_gamma: args.day_gamma,
+        transition_duration: args.transition_duration,
+        update_interval: args.update_interval,
+        transition_mode: Some(args.mode_combo.mode),
     }
 }
 
@@ -117,30 +164,32 @@ proptest! {
         mode_combo: TransitionModeCase,
     ) {
         let config = create_test_config_with_combinations(
-            bool_combo,
-            backend_combo,
-            mode_combo,
-            "19:00:00", // Standard sunset
-            "06:00:00", // Standard sunrise
-            Some(DEFAULT_TRANSITION_DURATION),
-            Some(DEFAULT_UPDATE_INTERVAL),
-            Some(DEFAULT_NIGHT_TEMP),
-            Some(DEFAULT_DAY_TEMP),
-            Some(DEFAULT_NIGHT_GAMMA),
-            Some(DEFAULT_DAY_GAMMA),
-            Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            TestConfigCreationArgs {
+                bool_combo,
+                backend_combo,
+                mode_combo,
+                sunset: "19:00:00".to_string(),
+                sunrise: "06:00:00".to_string(),
+                transition_duration: Some(DEFAULT_TRANSITION_DURATION),
+                update_interval: Some(DEFAULT_UPDATE_INTERVAL),
+                night_temp: Some(DEFAULT_NIGHT_TEMP),
+                day_temp: Some(DEFAULT_DAY_TEMP),
+                night_gamma: Some(DEFAULT_NIGHT_GAMMA),
+                day_gamma: Some(DEFAULT_DAY_GAMMA),
+                startup_transition_duration: Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            }
         );
 
         // Check that the specific incompatible combination fails
         let backend = config.backend.as_ref().unwrap_or(&DEFAULT_BACKEND);
         let start_hyprsunset = config.start_hyprsunset.unwrap_or(DEFAULT_START_HYPRSUNSET);
-        
+
         if *backend == Backend::Wayland && start_hyprsunset {
             // This combination should fail validation
-            prop_assert!(config.validate().is_err());
+            prop_assert!(validate_config(&config).is_err());
         } else {
             // All other combinations should pass validation
-            prop_assert!(config.validate().is_ok());
+            prop_assert!(validate_config(&config).is_ok());
         }
     }
 
@@ -163,27 +212,29 @@ proptest! {
         ]
     ) {
         let config = create_test_config_with_combinations(
-            BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) },
-            BackendCombinations { backend: Some(Backend::Auto) },
-            TransitionModeCase { mode: "finish_by".to_string() },
-            "19:00:00",
-            "06:00:00",
-            Some(DEFAULT_TRANSITION_DURATION),
-            Some(DEFAULT_UPDATE_INTERVAL),
-            Some(night_temp),
-            Some(day_temp),
-            Some(DEFAULT_NIGHT_GAMMA),
-            Some(DEFAULT_DAY_GAMMA),
-            Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            TestConfigCreationArgs {
+                bool_combo: BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) },
+                backend_combo: BackendCombinations { backend: Some(Backend::Auto) },
+                mode_combo: TransitionModeCase { mode: "finish_by".to_string() },
+                sunset: "19:00:00".to_string(),
+                sunrise: "06:00:00".to_string(),
+                transition_duration: Some(DEFAULT_TRANSITION_DURATION),
+                update_interval: Some(DEFAULT_UPDATE_INTERVAL),
+                night_temp: Some(night_temp),
+                day_temp: Some(day_temp),
+                night_gamma: Some(DEFAULT_NIGHT_GAMMA),
+                day_gamma: Some(DEFAULT_DAY_GAMMA),
+                startup_transition_duration: Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            }
         );
 
         let valid_night = (MINIMUM_TEMP..=MAXIMUM_TEMP).contains(&night_temp);
         let valid_day = (MINIMUM_TEMP..=MAXIMUM_TEMP).contains(&day_temp);
 
         if valid_night && valid_day {
-            prop_assert!(config.validate().is_ok());
+            prop_assert!(validate_config(&config).is_ok());
         } else {
-            prop_assert!(config.validate().is_err());
+            prop_assert!(validate_config(&config).is_err());
         }
     }
 
@@ -206,27 +257,29 @@ proptest! {
         ]
     ) {
         let config = create_test_config_with_combinations(
-            BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) },
-            BackendCombinations { backend: Some(Backend::Auto) },
-            TransitionModeCase { mode: "finish_by".to_string() },
-            "19:00:00",
-            "06:00:00",
-            Some(DEFAULT_TRANSITION_DURATION),
-            Some(DEFAULT_UPDATE_INTERVAL),
-            Some(DEFAULT_NIGHT_TEMP),
-            Some(DEFAULT_DAY_TEMP),
-            Some(night_gamma),
-            Some(day_gamma),
-            Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            TestConfigCreationArgs {
+                bool_combo: BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) },
+                backend_combo: BackendCombinations { backend: Some(Backend::Auto) },
+                mode_combo: TransitionModeCase { mode: "finish_by".to_string() },
+                sunset: "19:00:00".to_string(),
+                sunrise: "06:00:00".to_string(),
+                transition_duration: Some(DEFAULT_TRANSITION_DURATION),
+                update_interval: Some(DEFAULT_UPDATE_INTERVAL),
+                night_temp: Some(DEFAULT_NIGHT_TEMP),
+                day_temp: Some(DEFAULT_DAY_TEMP),
+                night_gamma: Some(night_gamma),
+                day_gamma: Some(day_gamma),
+                startup_transition_duration: Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            }
         );
 
         let valid_night = (MINIMUM_GAMMA..=MAXIMUM_GAMMA).contains(&night_gamma);
         let valid_day = (MINIMUM_GAMMA..=MAXIMUM_GAMMA).contains(&day_gamma);
 
         if valid_night && valid_day {
-            prop_assert!(config.validate().is_ok());
+            prop_assert!(validate_config(&config).is_ok());
         } else {
-            prop_assert!(config.validate().is_err());
+            prop_assert!(validate_config(&config).is_err());
         }
     }
 
@@ -242,26 +295,28 @@ proptest! {
         ]
     ) {
         let config = create_test_config_with_combinations(
-            BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) },
-            BackendCombinations { backend: Some(Backend::Auto) },
-            TransitionModeCase { mode: "finish_by".to_string() },
-            "19:00:00",
-            "06:00:00",
-            Some(transition_duration),
-            Some(DEFAULT_UPDATE_INTERVAL),
-            Some(DEFAULT_NIGHT_TEMP),
-            Some(DEFAULT_DAY_TEMP),
-            Some(DEFAULT_NIGHT_GAMMA),
-            Some(DEFAULT_DAY_GAMMA),
-            Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            TestConfigCreationArgs {
+                bool_combo: BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) },
+                backend_combo: BackendCombinations { backend: Some(Backend::Auto) },
+                mode_combo: TransitionModeCase { mode: "finish_by".to_string() },
+                sunset: "19:00:00".to_string(),
+                sunrise: "06:00:00".to_string(),
+                transition_duration: Some(transition_duration),
+                update_interval: Some(DEFAULT_UPDATE_INTERVAL),
+                night_temp: Some(DEFAULT_NIGHT_TEMP),
+                day_temp: Some(DEFAULT_DAY_TEMP),
+                night_gamma: Some(DEFAULT_NIGHT_GAMMA),
+                day_gamma: Some(DEFAULT_DAY_GAMMA),
+                startup_transition_duration: Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            }
         );
 
         let valid_duration = (MINIMUM_TRANSITION_DURATION..=MAXIMUM_TRANSITION_DURATION).contains(&transition_duration);
 
         if valid_duration {
-            prop_assert!(config.validate().is_ok());
+            prop_assert!(validate_config(&config).is_ok());
         } else {
-            prop_assert!(config.validate().is_err());
+            prop_assert!(validate_config(&config).is_err());
         }
     }
 
@@ -280,29 +335,31 @@ proptest! {
         transition_duration in MINIMUM_TRANSITION_DURATION..=MAXIMUM_TRANSITION_DURATION,
     ) {
         let config = create_test_config_with_combinations(
-            BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) },
-            BackendCombinations { backend: Some(Backend::Auto) },
-            TransitionModeCase { mode: "finish_by".to_string() },
-            "19:00:00",
-            "06:00:00",
-            Some(transition_duration),
-            Some(update_interval),
-            Some(DEFAULT_NIGHT_TEMP),
-            Some(DEFAULT_DAY_TEMP),
-            Some(DEFAULT_NIGHT_GAMMA),
-            Some(DEFAULT_DAY_GAMMA),
-            Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            TestConfigCreationArgs {
+                bool_combo: BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) },
+                backend_combo: BackendCombinations { backend: Some(Backend::Auto) },
+                mode_combo: TransitionModeCase { mode: "finish_by".to_string() },
+                sunset: "19:00:00".to_string(),
+                sunrise: "06:00:00".to_string(),
+                transition_duration: Some(transition_duration),
+                update_interval: Some(update_interval),
+                night_temp: Some(DEFAULT_NIGHT_TEMP),
+                day_temp: Some(DEFAULT_DAY_TEMP),
+                night_gamma: Some(DEFAULT_NIGHT_GAMMA),
+                day_gamma: Some(DEFAULT_DAY_GAMMA),
+                startup_transition_duration: Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            }
         );
 
         // Check if update interval is longer than transition duration
         let transition_duration_secs = transition_duration * 60;
-        
+
         if update_interval > transition_duration_secs {
             // This should fail validation
-            prop_assert!(config.validate().is_err());
+            prop_assert!(validate_config(&config).is_err());
         } else {
             // Other values may generate warnings but should not fail validation
-            prop_assert!(config.validate().is_ok());
+            prop_assert!(validate_config(&config).is_ok());
         }
     }
 
@@ -318,26 +375,28 @@ proptest! {
         ]
     ) {
         let config = create_test_config_with_combinations(
-            BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(true) },
-            BackendCombinations { backend: Some(Backend::Auto) },
-            TransitionModeCase { mode: "finish_by".to_string() },
-            "19:00:00",
-            "06:00:00",
-            Some(DEFAULT_TRANSITION_DURATION),
-            Some(DEFAULT_UPDATE_INTERVAL),
-            Some(DEFAULT_NIGHT_TEMP),
-            Some(DEFAULT_DAY_TEMP),
-            Some(DEFAULT_NIGHT_GAMMA),
-            Some(DEFAULT_DAY_GAMMA),
-            Some(startup_duration),
+            TestConfigCreationArgs {
+                bool_combo: BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(true) },
+                backend_combo: BackendCombinations { backend: Some(Backend::Auto) },
+                mode_combo: TransitionModeCase { mode: "finish_by".to_string() },
+                sunset: "19:00:00".to_string(),
+                sunrise: "06:00:00".to_string(),
+                transition_duration: Some(DEFAULT_TRANSITION_DURATION),
+                update_interval: Some(DEFAULT_UPDATE_INTERVAL),
+                night_temp: Some(DEFAULT_NIGHT_TEMP),
+                day_temp: Some(DEFAULT_DAY_TEMP),
+                night_gamma: Some(DEFAULT_NIGHT_GAMMA),
+                day_gamma: Some(DEFAULT_DAY_GAMMA),
+                startup_transition_duration: Some(startup_duration),
+            }
         );
 
         let valid_startup_duration = (MINIMUM_STARTUP_TRANSITION_DURATION..=MAXIMUM_STARTUP_TRANSITION_DURATION).contains(&startup_duration);
 
         if valid_startup_duration {
-            prop_assert!(config.validate().is_ok());
+            prop_assert!(validate_config(&config).is_ok());
         } else {
-            prop_assert!(config.validate().is_err());
+            prop_assert!(validate_config(&config).is_err());
         }
     }
 
@@ -355,18 +414,20 @@ proptest! {
         let sunrise = format!("{:02}:{:02}:00", sunrise_hour, sunrise_minute);
 
         let config = create_test_config_with_combinations(
-            BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) },
-            BackendCombinations { backend: Some(Backend::Auto) },
-            mode_combo,
-            &sunset,
-            &sunrise,
-            Some(transition_duration),
-            Some(DEFAULT_UPDATE_INTERVAL),
-            Some(DEFAULT_NIGHT_TEMP),
-            Some(DEFAULT_DAY_TEMP),
-            Some(DEFAULT_NIGHT_GAMMA),
-            Some(DEFAULT_DAY_GAMMA),
-            Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            TestConfigCreationArgs {
+                bool_combo: BooleanCombinations { start_hyprsunset: Some(false), startup_transition: Some(false) },
+                backend_combo: BackendCombinations { backend: Some(Backend::Auto) },
+                mode_combo,
+                sunset: sunset.to_string(),
+                sunrise: sunrise.to_string(),
+                transition_duration: Some(transition_duration),
+                update_interval: Some(DEFAULT_UPDATE_INTERVAL),
+                night_temp: Some(DEFAULT_NIGHT_TEMP),
+                day_temp: Some(DEFAULT_DAY_TEMP),
+                night_gamma: Some(DEFAULT_NIGHT_GAMMA),
+                day_gamma: Some(DEFAULT_DAY_GAMMA),
+                startup_transition_duration: Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            }
         );
 
         // Parse times for validation logic
@@ -375,7 +436,7 @@ proptest! {
 
         // Check for identical times (should fail)
         if sunset_time == sunrise_time {
-            prop_assert!(config.validate().is_err());
+            prop_assert!(validate_config(&config).is_err());
         } else {
             // Calculate day and night durations
             let sunset_mins = sunset_time.hour() * 60 + sunset_time.minute();
@@ -393,11 +454,11 @@ proptest! {
 
             // Very short periods (less than 1 hour) should fail
             if day_duration_mins < 60 || night_duration_mins < 60 {
-                prop_assert!(config.validate().is_err());
+                prop_assert!(validate_config(&config).is_err());
             } else {
                 // For longer periods, most should pass unless there are transition overlaps
                 // The validation result depends on complex transition overlap logic
-                let result = config.validate();
+                let result = validate_config(&config);
                 // We can't predict the exact result due to complex overlap calculations,
                 // but we can ensure it doesn't panic
                 prop_assert!(result.is_ok() || result.is_err());
@@ -434,29 +495,31 @@ proptest! {
         };
 
         let config = create_test_config_with_combinations(
-            bool_combo,
-            backend_combo,
-            mode_combo,
-            "19:00:00",
-            "06:00:00",
-            Some(transition_duration),
-            Some(update_interval),
-            Some(night_temp),
-            Some(day_temp),
-            Some(night_gamma),
-            Some(day_gamma),
-            Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            TestConfigCreationArgs {
+                bool_combo,
+                backend_combo,
+                mode_combo,
+                sunset: "19:00:00".to_string(),
+                sunrise: "06:00:00".to_string(),
+                transition_duration: Some(transition_duration),
+                update_interval: Some(update_interval),
+                night_temp: Some(night_temp),
+                day_temp: Some(day_temp),
+                night_gamma: Some(night_gamma),
+                day_gamma: Some(day_gamma),
+                startup_transition_duration: Some(DEFAULT_STARTUP_TRANSITION_DURATION),
+            }
         );
 
         // Check for the known incompatible backend combination
         let backend = config.backend.as_ref().unwrap_or(&DEFAULT_BACKEND);
         let start_hyprsunset = config.start_hyprsunset.unwrap_or(DEFAULT_START_HYPRSUNSET);
-        
+
         if *backend == Backend::Wayland && start_hyprsunset {
-            prop_assert!(config.validate().is_err());
+            prop_assert!(validate_config(&config).is_err());
         } else {
             // All other combinations with valid extreme values should pass
-            prop_assert!(config.validate().is_ok());
+            prop_assert!(validate_config(&config).is_ok());
         }
     }
 }
@@ -515,22 +578,23 @@ mod exhaustive_tests {
 
                     // Check for the specific incompatible combination
                     let actual_backend = config.backend.as_ref().unwrap_or(&DEFAULT_BACKEND);
-                    let actual_start_hyprsunset = config.start_hyprsunset.unwrap_or(DEFAULT_START_HYPRSUNSET);
-                    
+                    let actual_start_hyprsunset =
+                        config.start_hyprsunset.unwrap_or(DEFAULT_START_HYPRSUNSET);
+
                     if *actual_backend == Backend::Wayland && actual_start_hyprsunset {
                         // This combination should fail
                         assert!(
-                            config.validate().is_err(),
+                            validate_config(&config).is_err(),
                             "Expected validation failure for Wayland + start_hyprsunset=true, but got success. Config: {:?}",
                             config
                         );
                     } else {
                         // All other combinations should pass
                         assert!(
-                            config.validate().is_ok(),
+                            validate_config(&config).is_ok(),
                             "Expected validation success, but got failure. Config: {:?}, Error: {:?}",
                             config,
-                            config.validate()
+                            validate_config(&config)
                         );
                     }
                 }
@@ -547,7 +611,10 @@ mod exhaustive_tests {
         let gamma_boundaries = [MINIMUM_GAMMA, MAXIMUM_GAMMA];
         let transition_boundaries = [MINIMUM_TRANSITION_DURATION, MAXIMUM_TRANSITION_DURATION];
         let update_boundaries = [MINIMUM_UPDATE_INTERVAL, MAXIMUM_UPDATE_INTERVAL];
-        let startup_boundaries = [MINIMUM_STARTUP_TRANSITION_DURATION, MAXIMUM_STARTUP_TRANSITION_DURATION];
+        let startup_boundaries = [
+            MINIMUM_STARTUP_TRANSITION_DURATION,
+            MAXIMUM_STARTUP_TRANSITION_DURATION,
+        ];
 
         for night_temp in temp_boundaries {
             for day_temp in temp_boundaries {
@@ -578,7 +645,7 @@ mod exhaustive_tests {
                                     };
 
                                     assert!(
-                                        config.validate().is_ok(),
+                                        validate_config(&config).is_ok(),
                                         "Boundary value combination should be valid: {:?}",
                                         config
                                     );
@@ -592,4 +659,5 @@ mod exhaustive_tests {
 
         println!("✅ All boundary value combinations tested successfully!");
     }
-} 
+}
+

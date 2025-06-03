@@ -330,7 +330,7 @@ impl StartupTransition {
 
         // Print this with the normal logger before disabling it
         Log::log_pipe();
-        Log::log_debug(&format!(
+        Log::log_decorated(&format!(
             "Starting smooth transition {} ({}s)",
             transition_type,
             self.duration.as_secs()
@@ -368,21 +368,17 @@ impl StartupTransition {
             // Draw the progress bar instead of logging each step
             self.draw_progress_bar(progress, current_temp, current_gamma);
 
-            // Apply the current animation frame using the backend's direct temperature/gamma method
-            if let Err(_) = backend.apply_temperature_gamma(current_temp, current_gamma, running) {
-                // If application fails, return error
-                // Add a newline after the progress bar if we're exiting early
-                let mut stdout = io::stdout().lock();
-                writeln!(stdout).ok();
-                writeln!(stdout, "┃").ok();
-                stdout.flush().ok();
-
-                // Re-enable logging before returning
-                Log::set_enabled(true);
-
-                return Err(anyhow::anyhow!(
-                    "Failed to apply startup transition values"
-                ));
+            // Apply interpolated values
+            if backend
+                .apply_temperature_gamma(current_temp, current_gamma, running)
+                .is_err()
+            {
+                Log::log_warning(
+                    "Failed to apply temperature/gamma during startup transition. \
+                    Will attempt to set final state after transition.",
+                );
+                // Don't abort the whole transition, just log and continue
+                // The final state will be attempted later
             }
 
             // Break if we've reached 100%

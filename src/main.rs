@@ -1,93 +1,36 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
 use fs2::FileExt;
 use signal_hook::{
     consts::signal::{SIGINT, SIGTERM},
     iterator::Signals,
 };
 use std::{
-    env,
     fs::File,
     io::{self, Write},
     os::unix::io::AsRawFd,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::Arc,
+    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant},
 };
 use termios::{os::linux::ECHOCTL, *};
 
+mod backend;
 mod config;
 mod constants;
-mod backend;
 mod logger;
 mod startup_transition;
 mod time_state;
 mod utils;
 
+use backend::{create_backend, detect_backend};
 use config::Config;
 use constants::*;
-use backend::{detect_backend, create_backend};
 use logger::Log;
 use startup_transition::StartupTransition;
 use time_state::{TimeState, TransitionState, get_transition_state, time_until_next_event};
 
-/// Automatic color temperature controller for Wayland compositors
-#[derive(Parser)]
-#[command(author, version, about, long_about = None)]
-#[command(help_template = "\
-{before-help}{name} {version}
-{about-with-newline}
-{usage-heading} {usage}
-
-{all-args}{after-help}
-")]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Show version information
-    #[command(visible_alias = "v")]
-    Version,
-    /// Show help information
-    #[command(visible_alias = "h")]
-    Help,
-}
-
-fn print_help() {
-    println!("sunsetr v{}", env!("CARGO_PKG_VERSION"));
-    println!("Automatic color temperature controller for Wayland compositors");
-    println!();
-    println!("USAGE:");
-    println!("    sunsetr [COMMAND]");
-    println!();
-    println!("COMMANDS:");
-    println!("    help, -h, --help       Show this help message");
-    println!("    version, -v, --version Show version information");
-    println!();
-    println!("CONFIG:");
-    println!("    Configuration file is automatically created in:");
-    println!("    $HOME/.config/sunsetr/sunsetr.toml");
-    println!();
-    println!("    Legacy location is also supported:");
-    println!("    $HOME/.config/hypr/sunsetr.toml");
-}
-
-fn print_version() {
-    println!("sunsetr v{}", env!("CARGO_PKG_VERSION"));
-}
-
-fn handle_invalid_argument(arg: &str) {
-    eprintln!("error: unknown argument '{}'", arg);
-    eprintln!();
-    print_help();
-}
-
+/// Automatic blue light filter for Wayland compositors
 // Constants
 const CHECK_INTERVAL: Duration = Duration::from_secs(CHECK_INTERVAL_SECS);
 
@@ -120,7 +63,7 @@ impl TerminalGuard {
             }
             Err(e) => return Err(e),
         };
-        
+
         let fd = tty.as_raw_fd();
 
         // Take a snapshot of the current settings for restoration
@@ -152,6 +95,26 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// Displays version information using custom logging style.
+fn display_version_info() {
+    Log::log_version();
+    println!("┗ {}", env!("CARGO_PKG_DESCRIPTION"));
+}
+
+/// Displays custom help message using logger methods.
+fn display_custom_help() {
+    Log::log_version();
+    Log::log_decorated(env!("CARGO_PKG_DESCRIPTION"));
+    Log::log_pipe();
+    Log::log_decorated("Usage: sunsetr [OPTIONS]");
+    Log::log_pipe();
+    Log::log_decorated("Options:");
+    Log::log_indented("-d, --debug          Enable detailed debug output");
+    Log::log_indented("-h, --help           Print help information");
+    Log::log_indented("-V, --version        Print version information");
+    Log::log_end();
+}
+
 /// Perform cleanup operations when shutting down the application.
 ///
 /// This function handles:
@@ -163,7 +126,11 @@ impl Drop for TerminalGuard {
 /// * `backend` - The backend instance to clean up
 /// * `lock_file` - File handle for the application lock
 /// * `lock_path` - Path to the lock file for removal
-fn cleanup(backend: Box<dyn crate::backend::ColorTemperatureBackend>, lock_file: File, lock_path: &str) {
+fn cleanup(
+    backend: Box<dyn crate::backend::ColorTemperatureBackend>,
+    lock_file: File,
+    lock_path: &str,
+) {
     Log::log_decorated("Performing cleanup...");
 
     // Handle backend-specific cleanup
@@ -208,41 +175,45 @@ fn should_update_state(
         (TransitionState::Stable(_), TransitionState::Transitioning { progress, from, to })
             if *progress < 0.01 =>
         {
-            Log::log_pipe();
             let transition_type = match (from, to) {
                 (TimeState::Day, TimeState::Night) => "sunset 󰖛 ",
                 (TimeState::Night, TimeState::Day) => "sunrise 󰖜 ",
                 _ => "transition",
             };
-            Log::log_decorated(&format!("Commencing {}", transition_type));
+            Log::log_block_start(&format!("Commencing {}", transition_type));
+            Log::log_pipe();
             true
         }
-        // Detect completing a transition (progress near 100%)
+        // Detect change from transitioning to stable state (transition completed)
         (
-            TransitionState::Transitioning {
-                progress: prev_progress,
-                ..
-            },
-            TransitionState::Transitioning {
-                progress: curr_progress,
-                from,
-                to,
-            },
-        ) if *prev_progress < 0.99 && *curr_progress >= 0.99 => {
-            Log::log_pipe();
+            TransitionState::Transitioning { from, to, .. },
+            TransitionState::Stable(stable_state),
+        ) => {
             let transition_type = match (from, to) {
                 (TimeState::Day, TimeState::Night) => "sunset 󰖛 ",
                 (TimeState::Night, TimeState::Day) => "sunrise 󰖜 ",
                 _ => "transition",
             };
-            Log::log_decorated(&format!("Completed {}", transition_type));
+            Log::log_block_start(&format!("Completed {}", transition_type));
+
+            // Announce the mode we're now entering
+            let mode_announcement = match stable_state {
+                TimeState::Day => "Entering day mode 󰖨 ",
+                TimeState::Night => "Entering night mode  ",
+            };
+            Log::log_block_start(mode_announcement);
             true
         }
-        // Detect change from transitioning to stable state
-        (TransitionState::Transitioning { .. }, TransitionState::Stable(_)) => true,
         // Detect change from one stable state to another (should be rare)
         (TransitionState::Stable(prev), TransitionState::Stable(curr)) if prev != curr => {
             Log::log_block_start(&format!("State changed from {:?} to {:?}", prev, curr));
+
+            // Announce the mode we're now entering
+            let mode_announcement = match curr {
+                TimeState::Day => "Entering day mode 󰖨 ",
+                TimeState::Night => "Entering night mode  ",
+            };
+            Log::log_decorated(mode_announcement);
             true
         }
         // We're in a transition and it's time for a regular update
@@ -257,46 +228,52 @@ fn should_update_state(
 }
 
 fn main() -> Result<()> {
-    // Parse command-line arguments
-    let args: Vec<String> = env::args().collect();
-    
-    // Handle help and version flags
-    if args.len() == 2 {
-        let arg = &args[1];
+    let args: Vec<String> = std::env::args().collect();
+    let mut debug_enabled = false;
+    let mut display_help = false;
+    let mut display_version = false;
+    let mut unknown_arg_found = false;
+
+    // Manual argument parsing
+    for arg in args.iter().skip(1) {
+        // Skip the program name
         match arg.as_str() {
-            "-h" | "--help" | "help" => {
-                print_help();
-                return Ok(());
-            }
-            "-v" | "--version" | "version" => {
-                print_version();
-                return Ok(());
-            }
+            "--help" | "-h" => display_help = true,
+            "--version" | "-V" | "-v" => display_version = true,
+            "--debug" | "-d" => debug_enabled = true,
             _ => {
-                // Check if it's an invalid argument (starts with -)
+                // Check if the argument starts with a dash, indicating it's an option
                 if arg.starts_with('-') {
-                    handle_invalid_argument(arg);
-                    std::process::exit(1);
+                    Log::log_warning(&format!("Unknown option: {}", arg));
+                    unknown_arg_found = true;
                 }
-                // If it doesn't start with -, treat it as an invalid non-flag argument
-                handle_invalid_argument(arg);
-                std::process::exit(1);
+                // Non-option arguments are currently ignored, but could be handled here
+                // if positional arguments were supported in the future.
             }
         }
-    } else if args.len() > 2 {
-        // Multiple arguments - invalid
-        let invalid_args = args[1..].join(" ");
-        handle_invalid_argument(&invalid_args);
-        std::process::exit(1);
     }
-    // If args.len() == 1, just run normally (no arguments provided)
+
+    if display_version {
+        display_version_info();
+        return Ok(());
+    }
+
+    if display_help || unknown_arg_found {
+        display_custom_help();
+        return Ok(());
+    }
 
     // Try to set up terminal features (cursor hiding, echo suppression)
     // This will gracefully handle cases where no terminal is available (e.g., systemd service)
-    let _term = TerminalGuard::new()
-        .context("failed to initialize terminal features")?;
+    let _term = TerminalGuard::new().context("failed to initialize terminal features")?;
 
     Log::log_version();
+
+    // Log debug mode status
+    if debug_enabled {
+        Log::log_debug("Debug mode enabled - showing detailed backend operations");
+        Log::log_pipe();
+    }
 
     // Set up signal handling
     let running = Arc::new(AtomicBool::new(true));
@@ -328,7 +305,7 @@ fn main() -> Result<()> {
 
     // Load and validate configuration now that we know no other instance is running
     let config = Config::load()?;
-    
+
     // Detect and validate the backend early
     let backend_type = detect_backend(&config)?;
 
@@ -343,19 +320,15 @@ fn main() -> Result<()> {
             // Log configuration after acquiring lock
             config.log_config();
 
-            Log::log_decorated(&format!("Detected backend: {}", backend_type.name()));
-            
-            let mut backend = create_backend(backend_type, &config)?;
-            
-            // Test backend connection
-            if !backend.test_connection() {
-                anyhow::bail!(
-                    "Failed to connect to {} backend. Please ensure the compositor is running and supports the required protocols.",
-                    backend.backend_name()
-                );
-            }
-            
-            Log::log_decorated(&format!("Successfully connected to {} backend", backend.backend_name()));
+            Log::log_block_start(&format!("Detected backend: {}", backend_type.name()));
+
+            let mut backend = create_backend(backend_type, &config, debug_enabled)?;
+
+            // Backend creation already includes connection verification and logging
+            Log::log_block_start(&format!(
+                "Successfully connected to {} backend",
+                backend.backend_name()
+            ));
 
             let mut current_transition_state = get_transition_state(&config);
             let mut last_check_time = Instant::now();
@@ -391,9 +364,11 @@ fn main() -> Result<()> {
                                 &running,
                             ) {
                                 Ok(_) => {
-                                    Log::log_block_start(
-                                        "Initial state applied successfully (fallback)",
-                                    );
+                                    if debug_enabled {
+                                        Log::log_debug(
+                                            "Initial state applied successfully (fallback)",
+                                        );
+                                    }
                                 }
                                 Err(e) => {
                                     Log::log_warning(&format!(
@@ -411,7 +386,9 @@ fn main() -> Result<()> {
                     // Use immediate transition to current interpolated values
                     match backend.apply_startup_state(current_transition_state, &config, &running) {
                         Ok(_) => {
-                            Log::log_block_start("Initial state applied successfully");
+                            if debug_enabled {
+                                Log::log_debug("Initial state applied successfully");
+                            }
                         }
                         Err(e) => {
                             Log::log_warning(&format!("Failed to apply initial state: {}", e));
@@ -468,11 +445,13 @@ fn main() -> Result<()> {
                             if e.to_string().contains("reconnection attempt") {
                                 Log::log_error(&format!(
                                     "Cannot communicate with {}: {}",
-                                    backend.backend_name(), e
+                                    backend.backend_name(),
+                                    e
                                 ));
-                                Log::log_decorated(
-                                    &format!("{} appears to be permanently unavailable. Exiting...", backend.backend_name())
-                                );
+                                Log::log_decorated(&format!(
+                                    "{} appears to be permanently unavailable. Exiting...",
+                                    backend.backend_name()
+                                ));
                                 break; // Exit the main loop
                             } else {
                                 // Other error - just log it and retry next cycle

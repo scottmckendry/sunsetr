@@ -34,15 +34,7 @@ transition_mode = "finish_by"
 
     let (_temp_dir, config_path) = create_test_config_file(config_content);
 
-    // Set environment to use our test config
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let config = Config::load().unwrap();
+    let config = Config::load_from_path(&config_path).unwrap();
 
     // Test that configuration loads correctly
     assert_eq!(config.sunset, "19:00:00");
@@ -50,11 +42,6 @@ transition_mode = "finish_by"
     assert_eq!(config.night_temp, Some(3300));
     assert_eq!(config.day_temp, Some(6000));
     assert_eq!(config.transition_duration, Some(30));
-
-    // Clean up environment
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -76,22 +63,11 @@ transition_mode = "finish_by"
 "#;
 
     let (_temp_dir, config_path) = create_test_config_file(config_content);
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let config = Config::load().unwrap();
+    let config = Config::load_from_path(&config_path).unwrap();
 
     // This should load successfully despite extreme values
     assert_eq!(config.sunset, "22:30:00");
     assert_eq!(config.sunrise, "02:30:00");
-
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -113,22 +89,11 @@ transition_mode = "center"
 "#;
 
     let (_temp_dir, config_path) = create_test_config_file(config_content);
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let config = Config::load().unwrap();
+    let config = Config::load_from_path(&config_path).unwrap();
 
     assert_eq!(config.sunset, "14:00:00");
     assert_eq!(config.sunrise, "10:00:00");
     assert_eq!(config.transition_mode, Some("center".to_string()));
-
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -150,21 +115,10 @@ transition_mode = "start_at"
 "#;
 
     let (_temp_dir, config_path) = create_test_config_file(config_content);
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let config = Config::load().unwrap();
+    let config = Config::load_from_path(&config_path).unwrap();
 
     assert_eq!(config.transition_duration, Some(5));
     assert_eq!(config.update_interval, Some(10));
-
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -186,21 +140,10 @@ transition_mode = "finish_by"
 "#;
 
     let (_temp_dir, config_path) = create_test_config_file(config_content);
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let config = Config::load().unwrap();
+    let config = Config::load_from_path(&config_path).unwrap();
 
     assert_eq!(config.night_temp, Some(1000));
     assert_eq!(config.day_temp, Some(20000));
-
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -222,22 +165,11 @@ transition_mode = "center"
 "#;
 
     let (_temp_dir, config_path) = create_test_config_file(config_content);
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let config = Config::load().unwrap();
+    let config = Config::load_from_path(&config_path).unwrap();
 
     // This configuration should load successfully
     assert_eq!(config.sunset, "23:30:00");
     assert_eq!(config.sunrise, "00:30:00");
-
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -253,19 +185,8 @@ sunrise = "12:00:00"
 "#;
 
     let (_temp_dir, config_path) = create_test_config_file(invalid_config);
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let result = Config::load();
+    let result = Config::load_from_path(&config_path);
     assert!(result.is_err());
-
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -283,19 +204,8 @@ day_gamma = 150.0
 "#;
 
     let (_temp_dir, config_path) = create_test_config_file(invalid_config);
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let result = Config::load();
+    let result = Config::load_from_path(&config_path);
     assert!(result.is_err());
-
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -318,21 +228,10 @@ transition_mode = "finish_by"
 "#;
 
     let (_temp_dir, config_path) = create_test_config_file(config_content);
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let config = Config::load().unwrap();
+    let config = Config::load_from_path(&config_path).unwrap();
 
     assert_eq!(config.startup_transition, Some(true));
     assert_eq!(config.startup_transition_duration, Some(30));
-
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -348,19 +247,8 @@ transition_duration = [1, 2, 3]  # Array instead of number
 "#;
 
     let (_temp_dir, config_path) = create_test_config_file(malformed_config);
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let result = Config::load();
+    let result = Config::load_from_path(&config_path);
     assert!(result.is_err());
-
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -432,6 +320,7 @@ fn test_integration_time_state_calculation_scenarios() {
 }
 
 #[test]
+#[serial]
 fn test_integration_performance_stress_config() {
     // Test configuration that would stress the system
     let stress_config_content = r#"
@@ -450,22 +339,11 @@ transition_mode = "center"
 "#;
 
     let (_temp_dir, config_path) = create_test_config_file(stress_config_content);
-    unsafe {
-        std::env::set_var(
-            "XDG_CONFIG_HOME",
-            config_path.parent().unwrap().parent().unwrap(),
-        );
-    }
-
-    let config = Config::load().unwrap();
+    let config = Config::load_from_path(&config_path).unwrap();
 
     // This should load but might generate warnings
     assert_eq!(config.transition_duration, Some(120));
     assert_eq!(config.update_interval, Some(10));
-
-    unsafe {
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 }
 
 #[test]
@@ -499,9 +377,19 @@ sunrise = "07:00:00"
     let result = Config::load();
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("Found configuration files in both locations"));
-    assert!(error_msg.contains("sunsetr/sunsetr.toml"));
-    assert!(error_msg.contains("hypr/sunsetr.toml"));
+    // Assert the specific error message for testing-support mode
+    assert!(
+        error_msg.contains("TEST_MODE_CONFLICT"),
+        "Error message did not contain TEST_MODE_CONFLICT. Actual: {}", error_msg
+    );
+    assert!(
+        error_msg.contains("sunsetr/sunsetr.toml"),
+        "Error message did not contain new path. Actual: {}", error_msg
+    );
+    assert!(
+        error_msg.contains("hypr/sunsetr.toml"),
+        "Error message did not contain old path. Actual: {}", error_msg
+    );
 
     unsafe {
         std::env::remove_var("XDG_CONFIG_HOME");
@@ -509,9 +397,8 @@ sunrise = "07:00:00"
 }
 
 // Property-based testing for configurations
-#[cfg(feature = "proptest")]
+#[cfg(test)]
 mod property_tests {
-    use super::*;
     use proptest::prelude::*;
 
     proptest! {

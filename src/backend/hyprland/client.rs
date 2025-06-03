@@ -34,6 +34,7 @@ enum ErrorType {
 /// - State application with interpolated values during transitions
 pub struct HyprsunsetClient {
     pub socket_path: PathBuf,
+    pub debug_enabled: bool,
 }
 
 impl HyprsunsetClient {
@@ -44,9 +45,12 @@ impl HyprsunsetClient {
     /// 2. Use XDG_RUNTIME_DIR or fallback to /run/user/{uid}
     /// 3. Construct path: {runtime_dir}/hypr/{instance}/.hyprsunset.sock
     ///
+    /// # Arguments
+    /// * `debug_enabled` - Whether to enable debug output for this client
+    ///
     /// # Returns
     /// New HyprsunsetClient instance ready for connection attempts
-    pub fn new() -> Result<Self> {
+    pub fn new(debug_enabled: bool) -> Result<Self> {
         // Determine socket path (similar to how hyprsunset does it)
         let his_env = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok();
         let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
@@ -61,11 +65,14 @@ impl HyprsunsetClient {
         };
 
         // Only log socket path if file doesn't exist (for debugging)
-        if !socket_path.exists() {
+        if !socket_path.exists() && debug_enabled {
             Log::log_warning(&format!("Socket file doesn't exist at {:?}", socket_path));
         }
 
-        Ok(Self { socket_path })
+        Ok(Self {
+            socket_path,
+            debug_enabled,
+        })
     }
 
     /// Send a command to hyprsunset with proper logging and retry logic.
@@ -81,7 +88,7 @@ impl HyprsunsetClient {
     /// - `Err` if all retry attempts fail
     pub fn send_command(&mut self, command: &str) -> Result<()> {
         // Log the command being sent with appropriate log level
-        if Log::is_enabled() {
+        if self.debug_enabled {
             Log::log_indented(&format!("Sending command: {}", command));
         }
 
@@ -103,8 +110,9 @@ impl HyprsunsetClient {
 
         let max_attempts = 3;
         for attempt in 0..max_attempts {
-            if self.test_connection() {
-                if Log::is_enabled() {
+            // Use non-logging version to avoid spam during reconnection attempts
+            if self.test_connection_with_logging(false) {
+                if self.debug_enabled {
                     Log::log_decorated("Successfully reconnected to hyprsunset");
                 }
                 return true;
@@ -115,7 +123,7 @@ impl HyprsunsetClient {
             }
         }
 
-        if Log::is_enabled() {
+        if self.debug_enabled {
             Log::log_critical("Cannot reconnect to hyprsunset after multiple attempts.");
             Log::log_decorated(
                 "Please check if hyprsunset is still running. You may need to restart sunsetr.",
@@ -145,7 +153,7 @@ impl HyprsunsetClient {
             match self.try_send_command(command) {
                 Ok(_) => {
                     // Success - log if this required retries
-                    if attempt > 0 && Log::is_enabled() {
+                    if attempt > 0 && self.debug_enabled {
                         Log::log_decorated(&format!(
                             "Command succeeded on attempt {}/{}",
                             attempt + 1,
@@ -162,7 +170,7 @@ impl HyprsunsetClient {
                     match error_type {
                         ErrorType::Temporary => {
                             // Temporary error, retry after standard delay
-                            if Log::is_enabled() {
+                            if self.debug_enabled {
                                 Log::log_error(&format!(
                                     "Temporary error on attempt {}/{}: {}",
                                     attempt + 1,
@@ -174,7 +182,7 @@ impl HyprsunsetClient {
                         }
                         ErrorType::SocketGone => {
                             // Socket disappeared, possible hyprsunset restart
-                            if Log::is_enabled() {
+                            if self.debug_enabled {
                                 Log::log_warning(
                                     "hyprsunset appears to be unavailable. Attempting to reconnect...",
                                 );
@@ -188,7 +196,7 @@ impl HyprsunsetClient {
                             thread::sleep(Duration::from_millis(SOCKET_RECOVERY_DELAY_MS));
 
                             // Attempt to connect again
-                            if attempt + 1 < max_retries && Log::is_enabled() {
+                            if attempt + 1 < max_retries && self.debug_enabled {
                                 Log::log_indented(&format!(
                                     "Retrying connection (attempt {}/{})",
                                     attempt + 2,
@@ -198,7 +206,7 @@ impl HyprsunsetClient {
                         }
                         ErrorType::Permanent => {
                             // Permanent error, no sense in retrying
-                            if Log::is_enabled() {
+                            if self.debug_enabled {
                                 Log::log_decorated(&format!(
                                     "Command failed with permanent error: {}",
                                     last_error.as_ref().unwrap()
@@ -212,7 +220,7 @@ impl HyprsunsetClient {
         }
 
         // All attempts failed, try one final reconnection
-        if Log::is_enabled() {
+        if self.debug_enabled {
             Log::log_warning(&format!(
                 "Command '{}' failed after {} attempts. Checking if hyprsunset is still available...",
                 command, max_retries
@@ -221,19 +229,19 @@ impl HyprsunsetClient {
 
         if self.attempt_reconnection() {
             // Successfully reconnected, try the command one more time
-            if Log::is_enabled() {
+            if self.debug_enabled {
                 Log::log_decorated("Retrying command after successful reconnection...");
             }
 
             match self.try_send_command(command) {
                 Ok(_) => {
-                    if Log::is_enabled() {
+                    if self.debug_enabled {
                         Log::log_decorated("Command succeeded after reconnection!");
                     }
                     return Ok(());
                 }
                 Err(e) => {
-                    if Log::is_enabled() {
+                    if self.debug_enabled {
                         Log::log_critical(&format!(
                             "Command still failed after reconnection: {}",
                             e
@@ -283,10 +291,10 @@ impl HyprsunsetClient {
         if let Ok(bytes_read) = stream.read(&mut buffer) {
             if bytes_read > 0 {
                 let response = String::from_utf8_lossy(&buffer[0..bytes_read]);
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_indented(&format!("Response: {}", response.trim()));
                 }
-            } else if Log::is_enabled() {
+            } else if self.debug_enabled {
                 Log::log_indented("Connection closed without response");
             }
         }
@@ -305,6 +313,14 @@ impl HyprsunsetClient {
     /// - `true` if connection test succeeds
     /// - `false` if connection test fails
     pub fn test_connection(&mut self) -> bool {
+        self.test_connection_with_logging(true)
+    }
+
+    /// Test connection with optional logging control.
+    ///
+    /// This allows callers to test the connection without generating log output,
+    /// which is useful when multiple connection tests happen during initialization.
+    pub fn test_connection_with_logging(&mut self, enable_logging: bool) -> bool {
         // Check if socket file exists first
         if !self.socket_path.exists() {
             return false;
@@ -313,14 +329,14 @@ impl HyprsunsetClient {
         // Try to connect to the socket without sending any command
         match UnixStream::connect(&self.socket_path) {
             Ok(_) => {
-                if Log::is_enabled() {
+                if self.debug_enabled && enable_logging {
                     Log::log_pipe();
                     Log::log_debug("Successfully connected to hyprsunset socket");
                 }
                 true
             }
             Err(e) => {
-                if Log::is_enabled() {
+                if self.debug_enabled && enable_logging {
                     Log::log_pipe();
                     Log::log_decorated(&format!("Failed to connect to hyprsunset: {}", e));
                 }
@@ -333,7 +349,7 @@ impl HyprsunsetClient {
     ///
     /// This method handles stable time periods by applying the configured values
     /// for day or night mode. It executes multiple commands with error handling:
-    /// - Day mode: identity + day gamma
+    /// - Day mode: day temperature + day gamma
     /// - Night mode: night temperature + night gamma
     ///
     /// # Arguments
@@ -351,7 +367,7 @@ impl HyprsunsetClient {
     ) -> Result<()> {
         // Don't try to apply state if we're shutting down
         if !running.load(Ordering::SeqCst) {
-            if Log::is_enabled() {
+            if self.debug_enabled {
                 Log::log_decorated("Skipping state application during shutdown");
             }
             return Ok(());
@@ -359,49 +375,42 @@ impl HyprsunsetClient {
 
         match state {
             TimeState::Day => {
-                // Execute identity command to reset color temperature
-                if Log::is_enabled() {
-                    Log::log_debug("Setting identity mode (natural colors)...");
+                // Execute temperature command with configured day temperature
+                let day_temp = config.day_temp.unwrap_or(DEFAULT_DAY_TEMP);
+                if self.debug_enabled {
+                    Log::log_debug(&format!("Setting temperature to {}K...", day_temp));
                 }
-                let identity_success = match self.send_command("identity") {
-                    Ok(_) => true,
-                    Err(e) => {
-                        if Log::is_enabled() {
-                            Log::log_indented(&format!("Error setting identity mode: {}", e));
-                        }
-                        false
-                    }
-                };
+                let temp_success = self.run_temperature_command(day_temp);
 
                 // Add delay between commands to prevent conflicts
                 thread::sleep(Duration::from_millis(COMMAND_DELAY_MS));
 
                 // Execute gamma command
                 let day_gamma = config.day_gamma.unwrap_or(DEFAULT_DAY_GAMMA);
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_debug(&format!("Setting gamma to {:.1}%...", day_gamma));
                 }
                 let gamma_success = self.run_gamma_command(day_gamma);
 
                 // Result handling - consider partial success acceptable
-                match (identity_success, gamma_success) {
+                match (temp_success, gamma_success) {
                     (true, true) => Ok(()),
                     (true, false) => {
-                        if Log::is_enabled() {
-                            Log::log_warning("Partial success: identity applied, gamma failed");
+                        if self.debug_enabled {
+                            Log::log_warning("Partial success: temperature applied, gamma failed");
                         }
                         Ok(()) // Consider partial success acceptable
                     }
                     (false, true) => {
-                        if Log::is_enabled() {
-                            Log::log_warning("Partial success: gamma applied, identity failed");
+                        if self.debug_enabled {
+                            Log::log_warning("Partial success: gamma applied, temperature failed");
                         }
                         Ok(()) // Consider partial success acceptable
                     }
                     (false, false) => {
                         // Log the error and then return it
-                        let error_msg = "Both identity and gamma commands failed";
-                        if Log::is_enabled() {
+                        let error_msg = "Both temperature and gamma commands failed";
+                        if self.debug_enabled {
                             Log::log_error(error_msg);
                         }
                         Err(anyhow::anyhow!(error_msg))
@@ -411,7 +420,7 @@ impl HyprsunsetClient {
             TimeState::Night => {
                 // Execute temperature command
                 let night_temp = config.night_temp.unwrap_or(DEFAULT_NIGHT_TEMP);
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_debug(&format!("Setting temperature to {}K...", night_temp));
                 }
                 let temp_success = self.run_temperature_command(night_temp);
@@ -421,7 +430,7 @@ impl HyprsunsetClient {
 
                 // Execute gamma command
                 let night_gamma = config.night_gamma.unwrap_or(DEFAULT_NIGHT_GAMMA);
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_debug(&format!("Setting gamma to {:.1}%...", night_gamma));
                 }
                 let gamma_success = self.run_gamma_command(night_gamma);
@@ -430,13 +439,13 @@ impl HyprsunsetClient {
                 match (temp_success, gamma_success) {
                     (true, true) => Ok(()),
                     (true, false) => {
-                        if Log::is_enabled() {
+                        if self.debug_enabled {
                             Log::log_warning("Partial success: temperature applied, gamma failed");
                         }
                         Ok(()) // Consider partial success acceptable
                     }
                     (false, true) => {
-                        if Log::is_enabled() {
+                        if self.debug_enabled {
                             Log::log_warning("Partial success: gamma applied, temperature failed");
                         }
                         Ok(()) // Consider partial success acceptable
@@ -444,7 +453,7 @@ impl HyprsunsetClient {
                     (false, false) => {
                         // Log the error and then return it
                         let error_msg = "Both temperature and gamma commands failed";
-                        if Log::is_enabled() {
+                        if self.debug_enabled {
                             Log::log_error(error_msg);
                         }
                         Err(anyhow::anyhow!(error_msg))
@@ -475,7 +484,7 @@ impl HyprsunsetClient {
         running: &AtomicBool,
     ) -> Result<()> {
         if !running.load(Ordering::SeqCst) {
-            if Log::is_enabled() {
+            if self.debug_enabled {
                 Log::log_decorated("Skipping state application during shutdown");
             }
             return Ok(());
@@ -484,7 +493,7 @@ impl HyprsunsetClient {
         match state {
             TransitionState::Stable(time_state) => {
                 // Announce stable mode entry with appropriate icons
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     match time_state {
                         TimeState::Day => Log::log_block_start("Entering day mode 󰖨 "),
                         TimeState::Night => Log::log_block_start("Entering night mode  "),
@@ -497,7 +506,7 @@ impl HyprsunsetClient {
             }
             TransitionState::Transitioning { from, to, progress } => {
                 // Visual spacer before commands
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_pipe();
                 }
 
@@ -506,7 +515,7 @@ impl HyprsunsetClient {
                 let current_gamma = Self::calculate_interpolated_gamma(from, to, progress, config);
 
                 // Apply temperature command with progress-based value
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_debug(&format!("Setting temperature to {}K...", current_temp));
                 }
                 let temp_success = self.run_temperature_command(current_temp);
@@ -515,13 +524,13 @@ impl HyprsunsetClient {
                 thread::sleep(Duration::from_millis(COMMAND_DELAY_MS));
 
                 // Apply gamma command with progress-based value
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_debug(&format!("Setting gamma to {:.1}%...", current_gamma));
                 }
                 let gamma_success = self.run_gamma_command(current_gamma);
 
                 // Visual separator after commands
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_pipe();
                 }
 
@@ -529,13 +538,13 @@ impl HyprsunsetClient {
                 match (temp_success, gamma_success) {
                     (true, true) => Ok(()),
                     (true, false) => {
-                        if Log::is_enabled() {
+                        if self.debug_enabled {
                             Log::log_warning("Partial success: temperature applied, gamma failed");
                         }
                         Ok(()) // Consider partial success acceptable
                     }
                     (false, true) => {
-                        if Log::is_enabled() {
+                        if self.debug_enabled {
                             Log::log_warning("Partial success: gamma applied, temperature failed");
                         }
                         Ok(()) // Consider partial success acceptable
@@ -543,7 +552,7 @@ impl HyprsunsetClient {
                     (false, false) => {
                         // Log the error and then return it
                         let error_msg = "Both temperature and gamma commands failed";
-                        if Log::is_enabled() {
+                        if self.debug_enabled {
                             Log::log_error(error_msg);
                         }
                         Err(anyhow::anyhow!(error_msg))
@@ -568,7 +577,7 @@ impl HyprsunsetClient {
         match self.send_command(&temp_cmd) {
             Ok(_) => true,
             Err(e) => {
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_indented(&format!("Error setting temperature: {}", e));
                 }
                 false
@@ -591,7 +600,7 @@ impl HyprsunsetClient {
         match self.send_command(&gamma_cmd) {
             Ok(_) => true,
             Err(e) => {
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_indented(&format!("Error setting gamma: {}", e));
                 }
                 false
@@ -692,29 +701,32 @@ impl HyprsunsetClient {
         running: &AtomicBool,
     ) -> Result<()> {
         if !running.load(Ordering::SeqCst) {
-            if Log::is_enabled() {
+            if self.debug_enabled {
                 Log::log_decorated("Skipping state application during shutdown");
             }
             return Ok(());
         }
 
-        // First announce what mode we're entering
-        if Log::is_enabled() {
-            match state {
-                TransitionState::Stable(time_state) => match time_state {
-                    TimeState::Day => Log::log_block_start("Entering day mode 󰖨 "),
-                    TimeState::Night => Log::log_block_start("Entering night mode   "),
-                },
-                TransitionState::Transitioning { from, to, .. } => {
-                    let transition_type = match (from, to) {
-                        (TimeState::Day, TimeState::Night) => "Commencing sunset 󰖛 ",
-                        (TimeState::Night, TimeState::Day) => "Commencing sunrise 󰖜 ",
-                        _ => "Commencing transition",
-                    };
-                    Log::log_block_start(transition_type);
-                }
+        // First announce what mode we're entering (regardless of debug mode)
+        match state {
+            TransitionState::Stable(time_state) => match time_state {
+                TimeState::Day => Log::log_block_start("Entering day mode 󰖨 "),
+                TimeState::Night => Log::log_block_start("Entering night mode  "),
+            },
+            TransitionState::Transitioning { from, to, .. } => {
+                let transition_type = match (from, to) {
+                    (TimeState::Day, TimeState::Night) => "Commencing sunset 󰖛 ",
+                    (TimeState::Night, TimeState::Day) => "Commencing sunrise 󰖜 ",
+                    _ => "Commencing transition",
+                };
+                Log::log_block_start(transition_type);
+                Log::log_pipe();
             }
-            Log::log_pipe();
+        }
+
+        // Add debug logging if enabled
+        if self.debug_enabled {
+            // Log::log_pipe();
         }
 
         // Then apply the state (this will handle the actual commands and logging)
@@ -730,7 +742,7 @@ impl HyprsunsetClient {
                 let current_gamma = Self::calculate_interpolated_gamma(from, to, progress, config);
 
                 // Temperature command with logging
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_debug(&format!("Setting temperature to {}K...", current_temp));
                 }
                 let temp_success = self.run_temperature_command(current_temp);
@@ -739,13 +751,13 @@ impl HyprsunsetClient {
                 thread::sleep(Duration::from_millis(COMMAND_DELAY_MS));
 
                 // Gamma command with logging
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_debug(&format!("Setting gamma to {:.1}%...", current_gamma));
                 }
                 let gamma_success = self.run_gamma_command(current_gamma);
 
                 // Add pipe at the end
-                if Log::is_enabled() {
+                if self.debug_enabled {
                     Log::log_pipe();
                 }
 
@@ -753,13 +765,13 @@ impl HyprsunsetClient {
                 match (temp_success, gamma_success) {
                     (true, true) => Ok(()),
                     (true, false) => {
-                        if Log::is_enabled() {
+                        if self.debug_enabled {
                             Log::log_warning("Partial success: temperature applied, gamma failed");
                         }
                         Ok(()) // Consider partial success acceptable
                     }
                     (false, true) => {
-                        if Log::is_enabled() {
+                        if self.debug_enabled {
                             Log::log_warning("Partial success: gamma applied, temperature failed");
                         }
                         Ok(()) // Consider partial success acceptable
@@ -767,7 +779,7 @@ impl HyprsunsetClient {
                     (false, false) => {
                         // Log the error and then return it
                         let error_msg = "Both temperature and gamma commands failed";
-                        if Log::is_enabled() {
+                        if self.debug_enabled {
                             Log::log_error(error_msg);
                         }
                         Err(anyhow::anyhow!(error_msg))
@@ -781,7 +793,8 @@ impl HyprsunsetClient {
     ///
     /// This method applies exact temperature and gamma values, bypassing
     /// the normal state-based logic. It's used for fine-grained control
-    /// during animations like startup transitions.
+    /// during animations like startup transitions. The commands are sent
+    /// sequentially with a small delay between them to prevent conflicts.
     ///
     /// # Arguments
     /// * `temperature` - Color temperature in Kelvin (1000-20000)

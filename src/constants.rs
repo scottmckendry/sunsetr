@@ -12,7 +12,7 @@ pub const DEFAULT_START_HYPRSUNSET: bool = true;
 pub const DEFAULT_BACKEND: Backend = Backend::Auto; // Auto-detected during config generation 
 pub const DEFAULT_STARTUP_TRANSITION: bool = false;
 pub const DEFAULT_STARTUP_TRANSITION_DURATION: u64 = 10; // seconds
-pub const DEFAULT_STARTUP_UPDATE_INTERVAL_MS: u64 = 100; // milliseconds (5 updates per second for smooth animation)
+pub const DEFAULT_STARTUP_UPDATE_INTERVAL_MS: u64 = 150; // milliseconds (5 updates per second for smooth animation)
 pub const DEFAULT_SUNSET: &str = "19:00:00";
 pub const DEFAULT_SUNRISE: &str = "06:00:00";
 pub const DEFAULT_NIGHT_TEMP: u32 = 3300; // Kelvin - warm, comfortable for night viewing
@@ -67,7 +67,6 @@ pub const CHECK_INTERVAL_SECS: u64 = 1; // How often to check the running flag d
 
 pub const SOCKET_TIMEOUT_MS: u64 = 1000; // 1 second timeout for socket operations
 pub const SOCKET_BUFFER_SIZE: usize = 1024; // Buffer size for socket communication
-pub const STARTUP_COMMAND_DELAY_MS: u64 = 200; // Delay between commands during startup transition
 
 // ═══ User Interface Constants ═══
 // Visual display settings

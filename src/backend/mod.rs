@@ -13,13 +13,6 @@ pub mod wayland;
 /// (wlr-gamma-control-unstable-v1) implementations while providing a common interface
 /// for the main application logic.
 pub trait ColorTemperatureBackend {
-    /// Test if the backend can establish a connection to the display control system.
-    /// 
-    /// # Returns
-    /// - `true` if the backend is available and can control display settings
-    /// - `false` if the backend cannot connect or is unavailable
-    fn test_connection(&mut self) -> bool;
-
     /// Apply a specific transition state with proper interpolation.
     /// 
     /// This is the main method for applying color temperature and gamma changes.
@@ -190,6 +183,7 @@ pub fn detect_backend(config: &Config) -> Result<BackendType> {
 /// # Arguments
 /// * `backend_type` - The type of backend to create
 /// * `config` - Configuration for backend initialization
+/// * `debug_enabled` - Whether debug output should be enabled for this backend
 /// 
 /// # Returns
 /// A boxed backend implementation ready for use
@@ -197,13 +191,13 @@ pub fn detect_backend(config: &Config) -> Result<BackendType> {
 /// # Errors
 /// Returns an error if the backend cannot be initialized or if required
 /// dependencies are missing.
-pub fn create_backend(backend_type: BackendType, config: &Config) -> Result<Box<dyn ColorTemperatureBackend>> {
+pub fn create_backend(backend_type: BackendType, config: &Config, debug_enabled: bool) -> Result<Box<dyn ColorTemperatureBackend>> {
     match backend_type {
         BackendType::Hyprland => {
-            Ok(Box::new(hyprland::HyprlandBackend::new(config)?) as Box<dyn ColorTemperatureBackend>)
+            Ok(Box::new(hyprland::HyprlandBackend::new(config, debug_enabled)?) as Box<dyn ColorTemperatureBackend>)
         }
         BackendType::Wayland => {
-            Ok(Box::new(wayland::WaylandBackend::new(config)?) as Box<dyn ColorTemperatureBackend>)
+            Ok(Box::new(wayland::WaylandBackend::new(config, debug_enabled)?) as Box<dyn ColorTemperatureBackend>)
         }
     }
 }
