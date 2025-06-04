@@ -10,7 +10,6 @@ use crate::config::Config;
 use crate::constants::*;
 use crate::logger::Log;
 use crate::time_state::{TimeState, TransitionState};
-use crate::utils::{interpolate_f32, interpolate_u32};
 
 /// Error classification for retry logic.
 ///
@@ -513,8 +512,10 @@ impl HyprsunsetClient {
                 }
 
                 // Calculate interpolated values based on transition progress
-                let current_temp = Self::calculate_interpolated_temp(from, to, progress, config);
-                let current_gamma = Self::calculate_interpolated_gamma(from, to, progress, config);
+                let current_temp =
+                    crate::time_state::calculate_interpolated_temp(from, to, progress, config);
+                let current_gamma =
+                    crate::time_state::calculate_interpolated_gamma(from, to, progress, config);
 
                 // Apply temperature command with progress-based value
                 if self.debug_enabled {
@@ -611,90 +612,6 @@ impl HyprsunsetClient {
         }
     }
 
-    /// Calculate interpolated temperature value during transitions.
-    ///
-    /// Determines the appropriate start and end temperature values based on
-    /// the transition direction and interpolates between them using the progress.
-    ///
-    /// # Arguments
-    /// * `from` - Starting time state (Day or Night)
-    /// * `to` - Target time state (Day or Night)
-    /// * `progress` - Transition progress (0.0 to 1.0)
-    /// * `config` - Configuration containing temperature values
-    ///
-    /// # Returns
-    /// Interpolated temperature value in Kelvin
-    fn calculate_interpolated_temp(
-        from: TimeState,
-        to: TimeState,
-        progress: f32,
-        config: &Config,
-    ) -> u32 {
-        let (start_temp, end_temp) = match (from, to) {
-            (TimeState::Day, TimeState::Night) => (
-                config.day_temp.unwrap_or(DEFAULT_DAY_TEMP),
-                config.night_temp.unwrap_or(DEFAULT_NIGHT_TEMP),
-            ),
-            (TimeState::Night, TimeState::Day) => (
-                config.night_temp.unwrap_or(DEFAULT_NIGHT_TEMP),
-                config.day_temp.unwrap_or(DEFAULT_DAY_TEMP),
-            ),
-            // Handle edge cases where from == to
-            (TimeState::Day, TimeState::Day) => {
-                let day_temp = config.day_temp.unwrap_or(DEFAULT_DAY_TEMP);
-                (day_temp, day_temp)
-            }
-            (TimeState::Night, TimeState::Night) => {
-                let night_temp = config.night_temp.unwrap_or(DEFAULT_NIGHT_TEMP);
-                (night_temp, night_temp)
-            }
-        };
-
-        interpolate_u32(start_temp, end_temp, progress)
-    }
-
-    /// Calculate interpolated gamma value during transitions.
-    ///
-    /// Determines the appropriate start and end gamma values based on
-    /// the transition direction and interpolates between them using the progress.
-    ///
-    /// # Arguments
-    /// * `from` - Starting time state (Day or Night)
-    /// * `to` - Target time state (Day or Night)
-    /// * `progress` - Transition progress (0.0 to 1.0)
-    /// * `config` - Configuration containing gamma values
-    ///
-    /// # Returns
-    /// Interpolated gamma value as percentage (0.0 to 100.0)
-    fn calculate_interpolated_gamma(
-        from: TimeState,
-        to: TimeState,
-        progress: f32,
-        config: &Config,
-    ) -> f32 {
-        let (start_gamma, end_gamma) = match (from, to) {
-            (TimeState::Day, TimeState::Night) => (
-                config.day_gamma.unwrap_or(DEFAULT_DAY_GAMMA),
-                config.night_gamma.unwrap_or(DEFAULT_NIGHT_GAMMA),
-            ),
-            (TimeState::Night, TimeState::Day) => (
-                config.night_gamma.unwrap_or(DEFAULT_NIGHT_GAMMA),
-                config.day_gamma.unwrap_or(DEFAULT_DAY_GAMMA),
-            ),
-            // Handle edge cases where from == to
-            (TimeState::Day, TimeState::Day) => {
-                let day_gamma = config.day_gamma.unwrap_or(DEFAULT_DAY_GAMMA);
-                (day_gamma, day_gamma)
-            }
-            (TimeState::Night, TimeState::Night) => {
-                let night_gamma = config.night_gamma.unwrap_or(DEFAULT_NIGHT_GAMMA);
-                (night_gamma, night_gamma)
-            }
-        };
-
-        interpolate_f32(start_gamma, end_gamma, progress)
-    }
-
     /// Apply transition state specifically for startup scenarios
     /// This announces the mode first, then applies the state
     pub fn apply_startup_state(
@@ -711,20 +628,11 @@ impl HyprsunsetClient {
         }
 
         // First announce what mode we're entering (regardless of debug mode)
-        match state {
-            TransitionState::Stable(time_state) => match time_state {
-                TimeState::Day => Log::log_block_start("Entering day mode 󰖨 "),
-                TimeState::Night => Log::log_block_start("Entering night mode  "),
-            },
-            TransitionState::Transitioning { from, to, .. } => {
-                let transition_type = match (from, to) {
-                    (TimeState::Day, TimeState::Night) => "Commencing sunset 󰖛 ",
-                    (TimeState::Night, TimeState::Day) => "Commencing sunrise 󰖜 ",
-                    _ => "Commencing transition",
-                };
-                Log::log_block_start(transition_type);
-                Log::log_pipe();
-            }
+        crate::time_state::log_state_announcement(state);
+
+        // Add spacing for transitioning states
+        if matches!(state, TransitionState::Transitioning { .. }) {
+            Log::log_pipe();
         }
 
         // Add debug logging if enabled
@@ -741,8 +649,10 @@ impl HyprsunsetClient {
             TransitionState::Transitioning { from, to, progress } => {
                 // For transitioning states, apply the interpolated values directly
                 // Calculate interpolated values
-                let current_temp = Self::calculate_interpolated_temp(from, to, progress, config);
-                let current_gamma = Self::calculate_interpolated_gamma(from, to, progress, config);
+                let current_temp =
+                    crate::time_state::calculate_interpolated_temp(from, to, progress, config);
+                let current_gamma =
+                    crate::time_state::calculate_interpolated_gamma(from, to, progress, config);
 
                 // Temperature command with logging
                 if self.debug_enabled {

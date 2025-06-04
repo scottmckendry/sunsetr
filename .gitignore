@@ -1,4 +1,5 @@
 # Binaries and build artifacts
+docs/
 release/
 target/
 **/*.rs.bk

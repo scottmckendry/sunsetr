@@ -14,7 +14,7 @@ use wayland_protocols_wlr::gamma_control::v1::client::{
 use crate::backend::ColorTemperatureBackend;
 use crate::config::Config;
 use crate::logger::Log;
-use crate::time_state::{TimeState, TransitionState};
+use crate::time_state::TransitionState;
 
 pub mod gamma;
 
@@ -356,20 +356,7 @@ impl ColorTemperatureBackend for WaylandBackend {
         running: &AtomicBool,
     ) -> Result<()> {
         // First announce what mode we're entering (like Hyprland backend)
-        match state {
-            TransitionState::Stable(time_state) => match time_state {
-                TimeState::Day => Log::log_block_start("Entering day mode 󰖨 "),
-                TimeState::Night => Log::log_block_start("Entering night mode  "),
-            },
-            TransitionState::Transitioning { from, to, .. } => {
-                let transition_type = match (from, to) {
-                    (TimeState::Day, TimeState::Night) => "Commencing sunset 󰖛 ",
-                    (TimeState::Night, TimeState::Day) => "Commencing sunrise 󰖜 ",
-                    _ => "Commencing transition",
-                };
-                Log::log_block_start(transition_type);
-            }
-        }
+        crate::time_state::log_state_announcement(state);
 
         if self.debug_enabled {
             Log::log_pipe();

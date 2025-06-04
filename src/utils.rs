@@ -1,7 +1,24 @@
 //! Utility functions shared across the codebase.
 //!
 //! This module provides common functionality for interpolation, version handling,
-//! and other helper operations used throughout the application.
+//! terminal management, signal handling, resource cleanup, and other helper
+//! operations used throughout the application.
+
+use crate::logger::Log;
+use anyhow::Result;
+use signal_hook::{
+    consts::signal::{SIGINT, SIGTERM},
+    iterator::Signals,
+};
+use std::{
+    fs::File,
+    io::{self, Write},
+    os::unix::io::AsRawFd,
+    sync::Arc,
+    sync::atomic::{AtomicBool, Ordering},
+    thread,
+};
+use termios::{TCSANOW, Termios, os::linux::ECHOCTL, tcsetattr};
 
 /// Interpolate between two u32 values based on progress (0.0 to 1.0).
 ///
@@ -139,6 +156,149 @@ fn extract_semver_from_line(line: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Manages terminal state to hide cursor and suppress control character echoing.
+///
+/// This struct automatically restores the original terminal state when dropped,
+/// ensuring clean cleanup even if the program exits unexpectedly.
+pub struct TerminalGuard {
+    original_termios: Termios,
+}
+
+impl TerminalGuard {
+    /// Create a new terminal guard and modify terminal settings.
+    ///
+    /// Sets up the terminal to:
+    /// - Hide the cursor for cleaner output
+    /// - Suppress echoing of control characters like ^C
+    ///
+    /// # Returns
+    /// - `Ok(Some(guard))` if terminal is available and settings were applied
+    /// - `Ok(None)` if no terminal is available (e.g., running as a service)
+    /// - `Err` only for unexpected errors
+    pub fn new() -> io::Result<Option<Self>> {
+        // Try to open the controlling tty - if it fails, we're likely running headless
+        let tty = match File::open("/dev/tty") {
+            Ok(tty) => tty,
+            Err(e) if e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(6) => {
+                // No controlling terminal (common in systemd services) - this is not an error
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
+
+        let fd = tty.as_raw_fd();
+
+        // Take a snapshot of the current settings for restoration
+        let mut term = Termios::from_fd(fd)?;
+        let original = term;
+
+        // Disable the "^C" echo to prevent visual noise during shutdown
+        term.c_lflag &= !ECHOCTL;
+        tcsetattr(fd, TCSANOW, &term)?;
+
+        // Hide the cursor for cleaner output display
+        print!("\x1b[?25l");
+        io::stdout().flush()?; // always flush control sequences
+
+        Ok(Some(Self {
+            original_termios: original,
+        }))
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        // Best-effort restore of termios + cursor visibility
+        if let Ok(tty) = File::open("/dev/tty") {
+            let _ = tcsetattr(tty.as_raw_fd(), TCSANOW, &self.original_termios);
+        }
+        let _ = write!(io::stdout(), "\x1b[?25h");
+        let _ = io::stdout().flush();
+    }
+}
+
+/// Set up signal handling for graceful shutdown.
+///
+/// Registers signal handlers for SIGINT and SIGTERM that set a shared atomic boolean
+/// to false, allowing the main loop to detect shutdown requests and exit cleanly.
+///
+/// # Returns
+/// Arc<AtomicBool> that will be set to false when a shutdown signal is received.
+/// The main loop should check this periodically and exit when it becomes false.
+///
+/// # Errors
+/// Returns an error if signal registration fails
+pub fn setup_signal_handler() -> Result<Arc<AtomicBool>> {
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+
+    let mut signals = Signals::new([SIGINT, SIGTERM])?;
+    thread::spawn(move || {
+        for _sig in signals.forever() {
+            r.store(false, Ordering::SeqCst);
+        }
+    });
+
+    Ok(running)
+}
+
+/// Perform comprehensive application cleanup before shutdown.
+///
+/// This function handles three critical cleanup operations:
+/// - Backend-specific cleanup (stopping managed processes)
+/// - Releasing the lock file handle
+/// - Removing the lock file from disk
+///
+/// This function is designed to be called during normal shutdown or signal handling
+/// to ensure resources are properly cleaned up and no stale lock files remain.
+///
+/// # Arguments
+/// * `backend` - The backend instance to clean up (will call backend.cleanup())
+/// * `lock_file` - File handle for the application lock (will be dropped to release)
+/// * `lock_path` - Path to the lock file for removal from filesystem
+///
+/// # Examples
+/// ```no_run
+/// use sunsetr::utils::cleanup_application;
+/// use sunsetr::backend::{create_backend, detect_backend};
+/// use sunsetr::config::Config;
+/// use std::fs::File;
+///
+/// // Example usage during application shutdown
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let config = Config::load()?;
+/// let backend_type = detect_backend(&config)?;
+/// let backend = create_backend(backend_type, &config, false)?;
+/// let lock_file = File::create("/tmp/sunsetr.lock")?;
+/// 
+/// // During normal shutdown
+/// cleanup_application(backend, lock_file, "/tmp/sunsetr.lock");
+/// # Ok(())
+/// # }
+/// ```
+pub fn cleanup_application(
+    backend: Box<dyn crate::backend::ColorTemperatureBackend>,
+    lock_file: File,
+    lock_path: &str,
+) {
+    Log::log_decorated("Performing cleanup...");
+
+    // Handle backend-specific cleanup
+    backend.cleanup();
+
+    // Drop the lock file handle to release the lock
+    drop(lock_file);
+
+    // Remove the lock file from disk
+    if let Err(e) = std::fs::remove_file(lock_path) {
+        Log::log_decorated(&format!("Warning: Failed to remove lock file: {}", e));
+    } else {
+        Log::log_decorated("Lock file removed successfully");
+    }
+
+    Log::log_decorated("Cleanup complete");
 }
 
 #[cfg(test)]
@@ -306,4 +466,3 @@ mod tests {
         }
     }
 }
-

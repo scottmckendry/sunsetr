@@ -5,7 +5,7 @@ use crate::backend::ColorTemperatureBackend;
 use crate::config::Config;
 use crate::constants::*;
 use crate::logger::Log;
-use crate::time_state::{TimeState, TransitionState};
+use crate::time_state::TransitionState;
 
 pub mod client;
 pub mod process;
@@ -149,20 +149,7 @@ impl ColorTemperatureBackend for HyprlandBackend {
             // Check if target matches what hyprsunset was initialized with
             if target_temp == hyprsunset_init_temp && target_gamma == hyprsunset_init_gamma {
                 // hyprsunset already has the correct values, just announce the mode
-                match state {
-                    TransitionState::Stable(time_state) => match time_state {
-                        TimeState::Day => Log::log_block_start("Entering day mode 󰖨 "),
-                        TimeState::Night => Log::log_block_start("Entering night mode  "),
-                    },
-                    TransitionState::Transitioning { from, to, .. } => {
-                        let transition_type = match (from, to) {
-                            (TimeState::Day, TimeState::Night) => "Commencing sunset 󰖛 ",
-                            (TimeState::Night, TimeState::Day) => "Commencing sunrise 󰖜 ",
-                            _ => "Commencing transition",
-                        };
-                        Log::log_block_start(transition_type);
-                    }
-                }
+                crate::time_state::log_state_announcement(state);
                 return Ok(());
             }
         }

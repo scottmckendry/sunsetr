@@ -1,8 +1,17 @@
 //! Time-based state management for sunrise/sunset transitions.
 //!
-//! This module handles the core logic for determining when transitions should occur
-//! and calculating smooth progress values. It supports different transition modes
-//! and handles edge cases like midnight crossings and extreme day/night periods.
+//! This module handles the core logic for determining when transitions should occur,
+//! calculating smooth progress values, deciding when application state updates
+//! are needed, and providing standardized state messaging. It supports different 
+//! transition modes and handles edge cases like midnight crossings and extreme 
+//! day/night periods.
+//!
+//! ## Key Functionality
+//! - **State Detection**: Determining current time-based state (day, night, or transitioning)
+//! - **Transition Calculation**: Computing smooth interpolation between day/night values  
+//! - **Update Logic**: Deciding when backend state changes should be applied
+//! - **Standardized Messaging**: Providing consistent state announcement messages
+//! - **Time Handling**: Managing complex timing scenarios including midnight crossings
 
 use chrono::{Local, NaiveTime, Timelike};
 use std::time::Duration;
@@ -12,7 +21,7 @@ use crate::constants::{
     DEFAULT_DAY_GAMMA, DEFAULT_DAY_TEMP, DEFAULT_NIGHT_GAMMA, DEFAULT_NIGHT_TEMP,
     DEFAULT_TRANSITION_DURATION, DEFAULT_UPDATE_INTERVAL,
 };
-// use crate::logger::Log;
+use crate::logger::Log;
 use crate::utils::{interpolate_f32, interpolate_u32};
 
 /// Represents the basic time-based state of the display.
@@ -370,6 +379,124 @@ pub fn calculate_interpolated_gamma(
     };
 
     interpolate_f32(start_gamma, end_gamma, progress)
+}
+
+/// Get the name of the transition type (for use in "Commencing/Completed" messages).
+///
+/// Returns just the transition name without the "Commencing" prefix.
+///
+/// # Arguments
+/// * `from` - Starting time state  
+/// * `to` - Target time state
+///
+/// # Returns
+/// String containing the transition type name with icon
+pub fn get_transition_type_name(from: TimeState, to: TimeState) -> &'static str {
+    match (from, to) {
+        (TimeState::Day, TimeState::Night) => "sunset 󰖛 ",
+        (TimeState::Night, TimeState::Day) => "sunrise 󰖜 ",
+        _ => "transition",
+    }
+}
+
+/// Determine whether the application state should be updated.
+///
+/// This function implements the logic for deciding when to apply state changes
+/// to the backend. It considers:
+/// - Transition start/end detection
+/// - Progress during ongoing transitions  
+/// - State changes between stable periods
+/// - Time jump detection (system sleep/resume)
+///
+/// # Arguments
+/// * `current_state` - The last known transition state
+/// * `new_state` - The newly calculated transition state
+/// * `time_since_last_check` - Duration since last state check
+///
+/// # Returns
+/// `true` if the state should be updated, `false` to skip this update cycle
+pub fn should_update_state(
+    current_state: &TransitionState,
+    new_state: &TransitionState,
+    time_since_last_check: Duration,
+) -> bool {
+    use crate::constants::SLEEP_DETECTION_THRESHOLD_SECS;
+
+    match (current_state, new_state) {
+        // Detect entering a transition (from stable to transitioning)
+        (TransitionState::Stable(_), TransitionState::Transitioning { progress, from, to })
+            if *progress < 0.01 =>
+        {
+            let transition_type = get_transition_type_name(*from, *to);
+            Log::log_block_start(&format!("Commencing {}", transition_type));
+            true
+        }
+        // Detect change from transitioning to stable state (transition completed)
+        (
+            TransitionState::Transitioning { from, to, .. },
+            TransitionState::Stable(stable_state),
+        ) => {
+            let transition_type = get_transition_type_name(*from, *to);
+            Log::log_block_start(&format!("Completed {}", transition_type));
+
+            // Announce the mode we're now entering
+            Log::log_block_start(get_stable_state_message(*stable_state));
+            true
+        }
+        // Detect change from one stable state to another (should be rare)
+        (TransitionState::Stable(prev), TransitionState::Stable(curr)) if prev != curr => {
+            Log::log_block_start(&format!("State changed from {:?} to {:?}", prev, curr));
+
+            // Announce the mode we're now entering
+            Log::log_decorated(get_stable_state_message(*curr));
+            true
+        }
+        // We're in a transition and it's time for a regular update
+        (TransitionState::Transitioning { .. }, TransitionState::Transitioning { .. }) => true,
+        // Large time jump detected - force update to handle system sleep/resume
+        _ if time_since_last_check > Duration::from_secs(SLEEP_DETECTION_THRESHOLD_SECS) => {
+            Log::log_decorated("Applying state due to time jump detection");
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Get the appropriate log message for announcing a stable state.
+///
+/// Returns the standardized message with icons for entering day or night mode.
+///
+/// # Arguments
+/// * `state` - The stable time state (Day or Night)
+///
+/// # Returns
+/// String containing the appropriate announcement message
+pub fn get_stable_state_message(state: TimeState) -> &'static str {
+    match state {
+        TimeState::Day => "Entering day mode 󰖨 ",
+        TimeState::Night => "Entering night mode  ",
+    }
+}
+
+/// Log the appropriate message for a transition state.
+///
+/// This function centralizes the state announcement logic that was previously
+/// duplicated across backend modules.
+///
+/// # Arguments
+/// * `state` - The transition state to announce
+pub fn log_state_announcement(state: TransitionState) {
+    use crate::logger::Log;
+
+    match state {
+        TransitionState::Stable(time_state) => {
+            Log::log_block_start(get_stable_state_message(time_state));
+        }
+        TransitionState::Transitioning { from, to, .. } => {
+            let transition_type = get_transition_type_name(from, to);
+            Log::log_block_start(&format!("Commencing {}", transition_type));
+        }
+    }
 }
 
 #[cfg(test)]

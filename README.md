@@ -1,21 +1,31 @@
 # sunsetr
 
-Automatic color temperature controller for hyprsunset with smooth transitions.
+Automatic blue light filter for Hyprland, niri, and Wayland compositors
 
 ![This image was taken using a shader to simulate the effect of hyprsunset](sunsetr.png)
 
 ## Features
 
+- **Multi-Compositor Support**: Works with Hyprland, niri, Sway, river, Wayfire, and other Wayland compositors
+- **Automatic Backend Detection**: Intelligently detects your compositor and uses the appropriate backend
 - **Startup Transitions**: Smooth transitions when starting, no jarring changes
-- **Automatic hyprsunset Management**: Handles hyprsunset startup and communication automatically
+- **Smart hyprsunset Management**: Automatically handles hyprsunset startup and communication on Hyprland
+- **Universal Wayland Support**: Direct protocol communication on non-Hyprland compositors
 - **Smart Defaults**: Works beautifully out-of-the-box with carefully tuned settings
 - **Flexible Configuration**: Extensive customization options for power users
-- **Robust Error Handling**: Graceful fallback and recovery from various error condition
+- **Robust Error Handling**: Graceful fallback and recovery from various error conditions
 
 ## Dependencies
 
+### For Hyprland Users
+
 - **Hyprland 0.49.0** (tested version)
 - **hyprsunset v0.2.0** (tested version)
+
+### For Other Wayland Compositors
+
+- **Any Wayland compositor** supporting `wlr-gamma-control-unstable-v1` protocol
+- **No external dependencies** - uses native Wayland protocols
 
 ## Installation
 
@@ -56,11 +66,12 @@ systemctl --user enable --now sunsetr.service
 
 ## ⚙️ Configuration
 
-sunsetr creates a default configuration at `~/.config/hypr/sunsetr.toml` on first run. The defaults provide an excellent out-of-the-box experience for most users:
+sunsetr creates a default configuration at `~/.config/sunsetr/sunsetr.toml` on first run (legacy location `~/.config/hypr/sunsetr.toml` is still supported). The defaults provide an excellent out-of-the-box experience for most users:
 
 ```toml
 #[Sunsetr configuration]
-start_hyprsunset = true          # Set true if you're not using hyprsunset.service
+backend = "auto"                 # Backend: "auto", "hyprland", or "wayland"
+start_hyprsunset = true          # Set true if you're not using hyprsunset.service (Hyprland only)
 startup_transition = true        # Enable smooth transition when sunsetr starts
 startup_transition_duration = 10 # Duration of startup transition in seconds (10-60)
 sunset = "19:00:00"              # Time to transition to night mode (HH:MM:SS)
@@ -79,9 +90,34 @@ transition_mode = "finish_by"    # Transition timing mode:
 
 ### Key Settings Explained
 
-- **`start_hyprsunset = true`** (recommended): sunsetr automatically starts and manages hyprsunset, eliminating setup complexity (requires you do not enable hyprsunset.service)
-- **`startup_transition = false`** (recommended): Provides transition to correct interpolated temperature when starting
-- **`transition_mode = "finish_by"`**: Ensures transitions complete exactly at sunset/sunrise times for consistent daily rhythm
+- **`backend = "auto"`** (recommended): Automatically detects your compositor and uses the appropriate backend
+- **`start_hyprsunset = true`** (Hyprland only): sunsetr automatically starts and manages hyprsunset
+- **`startup_transition = false`**: Provides smooth transition to correct values when starting
+- **`transition_mode = "finish_by"`**: Ensures transitions complete exactly at sunset/sunrise times
+
+### Backend-Specific Configuration
+
+#### Automatic Detection (Recommended)
+
+```toml
+backend = "auto"
+```
+
+sunsetr will automatically detect your compositor and configure itself appropriately.
+
+#### Explicit Backend Selection
+
+```toml
+# For Hyprland users
+backend = "hyprland"
+start_hyprsunset = true
+
+# For other Wayland compositors
+# Though it works on Hyprland too
+backend = "wayland"
+# Ignored on non-Hyprland compositors when backend is set to auto
+start_hyprsunset = false
+```
 
 ## Alternative Configurations
 
@@ -140,8 +176,18 @@ sunsetr &
 
 ## ✓ Version Compatibility
 
+### Hyprland
+
 - **Hyprland >=0.49.0**
 - **hyprsunset >=v0.2.0**
+
+### Other Wayland Compositors
+
+- **niri** (any version with wlr-gamma-control support)
+- **Sway** (any version with wlr-gamma-control support)
+- **river** (any version with wlr-gamma-control support)
+- **Wayfire** (any version with wlr-gamma-control support)
+- **Other wlr-based compositors** with gamma control support
 
 Other versions may work but haven't been extensively tested.
 
@@ -151,7 +197,6 @@ Other versions may work but haven't been extensively tested.
 
 - Ensure hyprsunset is installed and accessible
 - Check that Hyprland is running
-- Verify `~/.config/hypr/` directory exists
 
 ### Startup transitions aren't smooth
 
@@ -167,6 +212,16 @@ Other versions may work but haven't been extensively tested.
 
 ## 🪵 Changelog
 
+### v0.4.0
+
+- **Multi-Compositor Support**: Added support for Sway, river, Wayfire, and other Wayland compositors
+- **Automatic Backend Detection**: Smart detection of compositor type with appropriate backend selection
+- **Universal Wayland Backend**: Complete implementation of wlr-gamma-control-unstable-v1 protocol
+- **Enhanced Configuration System**: New `backend` field with dual config path support
+- **Zero Breaking Changes**: Full backward compatibility with existing Hyprland configurations
+- **Improved Error Handling**: Better error messages with actionable guidance
+- **Comprehensive Testing**: Property-based testing for all backend scenarios
+
 ### v0.3.0
 
 - Added smooth animated startup transitions
@@ -180,10 +235,12 @@ Other versions may work but haven't been extensively tested.
 
 - [x] Set up AUR package
 - [x] Implement gradual transitions
-- [ ] Make sunsetr compatible with niri
+- [x] Multi-compositor Wayland support
 - [ ] Make Nix installation available
 
 ## 💛 Thanks
 
-- to the Hyprwm team for making Hyprland possible for the rest of us.
 - to wlsunset and redshift for inspiration
+- to the Hyprwm team for making Hyprland possible for the rest of us
+- to the niri team for making the best Rust-based Wayland compositor
+- to the Wayland community for the robust protocol ecosystem
