@@ -52,6 +52,7 @@ impl HyprlandBackend {
                 Log::log_warning(
                     "hyprsunset is already running but start_hyprsunset is enabled in config.",
                 );
+                Log::log_pipe();
                 anyhow::bail!(
                     "This indicates a configuration conflict. Please choose one:\n\
                     • Kill the existing hyprsunset process: pkill hyprsunset\n\
@@ -213,6 +214,7 @@ pub fn verify_hyprsunset_installed_and_version() -> Result<()> {
                 if is_version_compatible(&version) {
                     Ok(())
                 } else {
+                    Log::log_pipe();
                     anyhow::bail!(
                         "hyprsunset {} is not compatible with sunsetr.\n\
                         Required minimum version: {}\n\
@@ -241,7 +243,10 @@ pub fn verify_hyprsunset_installed_and_version() -> Result<()> {
                     );
                     Ok(())
                 }
-                _ => anyhow::bail!("hyprsunset is not installed on the system"),
+                _ => {
+                    Log::log_pipe();
+                    anyhow::bail!("hyprsunset is not installed on the system");
+                }
             }
         }
     }
@@ -277,6 +282,7 @@ pub fn verify_hyprsunset_connection(client: &mut HyprsunsetClient) -> Result<()>
 
     Log::log_critical("Cannot connect to hyprsunset socket.");
 
+    Log::log_pipe();
     anyhow::bail!(
         "\nThis usually means:\n\
           • hyprsunset is not running\n\

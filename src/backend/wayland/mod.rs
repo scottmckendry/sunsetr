@@ -77,6 +77,7 @@ impl WaylandBackend {
     pub fn new(_config: &Config, debug_enabled: bool) -> Result<Self> {
         // Verify we're running on Wayland
         if std::env::var("WAYLAND_DISPLAY").is_err() {
+            Log::log_pipe();
             anyhow::bail!("WAYLAND_DISPLAY is not set. Are you running on Wayland?");
         }
 
@@ -112,6 +113,7 @@ impl WaylandBackend {
 
         // Check if we have the gamma control manager
         if app_data.gamma_manager.is_none() {
+            Log::log_pipe();
             anyhow::bail!(
                 "Compositor does not support wlr-gamma-control-unstable-v1 protocol.\n\
                 This is required for color temperature control on Wayland.\n\
@@ -138,6 +140,7 @@ impl WaylandBackend {
         // Dispatch events to process potential gamma_size events from the compositor
         // This ensures that the gamma_size is populated before we proceed.
         event_queue.roundtrip(&mut app_data).map_err(|e| {
+            Log::log_pipe();
             anyhow::anyhow!(
                 "Failed during roundtrip after setting up gamma controls: {}",
                 e
@@ -145,6 +148,7 @@ impl WaylandBackend {
         })?;
 
         if app_data.outputs.is_empty() {
+            Log::log_pipe();
             anyhow::bail!("No outputs found for gamma control");
         }
 
