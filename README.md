@@ -47,6 +47,33 @@ You can find [sunsetr-bin](https://aur.archlinux.org/sunsetr-bin.git) in the AUR
 paru -S sunsetr-bin
 ```
 
+### Option 3: NixOS (with flakes)
+
+Add to your flake inputs:
+
+```nix
+{
+  inputs.sunsetr.url = "github:psi4j/sunsetr";
+}
+```
+
+Then you can use it in your configuration:
+
+```nix
+{ inputs, pkgs, ... }:
+{
+  # Install as a system package
+  environment.systemPackages = [
+    inputs.sunsetr.packages.${pkgs.system}.default
+  ];
+
+  # OR with home-manager
+  home.packages = [
+    inputs.sunsetr.packages.${pkgs.system}.default
+  ];
+}
+```
+
 ## Recommended Setup
 
 ### Hyprland
